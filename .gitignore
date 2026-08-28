@@ -29,3 +29,6 @@ Thumbs.db
 # prisma local
 *.db
 *.db-journal
+
+# mail preview output (TM-3: chứa plaintext email + claim link — KHÔNG commit)
+mail-previews/

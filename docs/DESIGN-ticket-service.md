@@ -1,10 +1,14 @@
 # DESIGN: Ticket Service (ticket-mayo)
 
-**Status**: Draft v2 (refactor sau khi tích hợp content-service)
+**Status**: Draft v3 — PIVOT 2026-08-25 sang SELF-CONTAINED (supersede v2)
 **Author**: Backend Architect
 **Last Updated**: 2026-08-25
 **Source PRD**: `c:\MAYogu_VIASG\chat-app\docs\PRD-ticket-email-distribution.md` v1.0
-**Repo target**: `c:\MAYogu_VIASG\ticket-mayo` (hiện trống — chỉ có `.git`)
+**Repo target**: `c:\MAYogu_VIASG\ticket-mayo`
+
+> **PIVOT 2026-08-25 (QUAN TRỌNG — supersede phần lớn v2):** Design v2 định *delegate auth cho gateway-auth* + *tích hợp content-service* (Ticket/TicketType/Event/check-in/QR/stats ở content-service). **PROVEN UNVIABLE** qua việc đọc code thật: gateway-auth `/auth/register/complete` (auth-register.service.ts:272-291) bắt buộc **email OTP + SMS OTP + SĐT Việt Nam** (`isValidVNPhone`), và `/auth/login` (auth-login.service.ts:75-81) gọi `user-community.checkUser` → người nhận vé chỉ có email **KHÔNG THỂ** thành user-community user → register + login đều fail. Quyết định LOCKED: **ticket-mayo TỰ CHỨA hoàn toàn** — tự sở hữu PortalUser(email+password, bcrypt, JWT HS256/JWT_SECRET), Event, TicketType, Ticket(qrPayload, checkedInAt, checkedInGateId), check-in, Distribution, PreTicket, Stats. KHÔNG dùng gateway-auth/user-community/content-service. Các section §5.5 (auth delegate), §3 (schema chỉ PreTicket/Distribution), §1.3/§5 (content-service source-of-truth), Phụ lục A bị supersede. Email binding vẫn dùng `generateEmailHash`=HMAC-SHA256(FIELD_ENCRYPTION_PEPPER, email.toLowerCase().trim()) (giữ nguyên, đã verify khớp user-community). Xem memory `project_ticket_mayo.md`.
+
+---
 
 > Ghi chú phương pháp: Design doc này dựa trên đọc code thật từ 5 service liên quan (content-service, user-community-service, gateway-auth-service, noti-analytics-service, chat-app). **content-service là source-of-truth cho Ticket/TicketType/Event/check-in/QR/scanner/stats** (đã verify code — xem §1.3 + Phụ lục A). ticket-mayo CHỈ là lớp **phát vé qua email + user portal + admin analytics dashboard**, gọi API nội bộ content-service. chat-app chỉ là reference cho stack (React + Vite) — KHÔNG phải target repo. Mọi tham chiếu đều kèm file/dòng cụ thể làm bằng chứng. KHÔNG viết code implementation — chỉ thiết kế.
 

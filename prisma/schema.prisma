@@ -1,0 +1,111 @@
+// ticket-mayo — công cụ phát vé qua email + portal người dùng.
+//
+// ⚠️ PIVOT (2026-08-26): Event / TicketType / Ticket / check-in KHÔNG còn nằm ở
+// DBS này — content-service là nguồn sự thật. ticket-mayo giữ:
+//   • PortalUser     — auth email+password riêng (không gateway/OTP)
+//   • DistributionJob/PreTicket — trạng thái quy trình phát vé (snapshot + claim token)
+//     Vé "thật" (contentTicketId/contentTicketCode) sinh ở content-service qua
+//     inbound API (x-service-token).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PortalUserRole {
+  ADMIN
+  USER
+}
+
+enum DistributionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIALLY_MINTED
+}
+
+enum PreTicketStatus {
+  PENDING
+  MINTING
+  MINTED
+  LINKED
+  CLAIMING
+  CLAIMED
+  EXPIRED
+}
+
+model PortalUser {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  emailHash    String         @unique
+  passwordHash String
+  role         PortalUserRole @default(USER)
+  displayName  String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([emailHash])
+}
+
+model DistributionJob {
+  id             String             @id @default(uuid())
+  ticketTypeId   String
+  ticketTypeName String
+  eventName      String
+  eventId        String
+  total          Int
+  sent           Int                @default(0)
+  failed         Int                @default(0)
+  status         DistributionStatus @default(PENDING)
+  mintMode       String             @default("LAZY") // snapshot LAZY/EAGER lúc distribute (UI-P1); default cho job lịch sử
+  idempotencyKey String?            @unique
+  createdBy      String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  preTickets     PreTicket[]
+
+  @@index([status])
+}
+
+model PreTicket {
+  id                 String          @id @default(uuid())
+  jobId              String
+  job                DistributionJob @relation(fields: [jobId], references: [id])
+  recipientEmailHash String
+  claimToken         String          @unique
+  ticketTypeId       String
+  eventId            String
+  ticketTypeName     String
+  eventName          String
+  contentTicketId    String?         @unique
+  contentTicketCode  String?
+  status             PreTicketStatus @default(PENDING)
+  recipientUserId    String?
+  mintedAt           DateTime?
+  lastMintError      String?
+  emailSentAt        DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime        @default(now())
+  claimedAt          DateTime?
+
+  @@index([recipientEmailHash])
+  @@index([jobId])
+  @@index([recipientEmailHash, status])
+  @@index([ticketTypeId, status, createdAt])
+}
+
+model DistributionAudit {
+  id        String   @id @default(uuid())
+  jobId     String
+  emailHash String?
+  action    String
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([jobId])
+}

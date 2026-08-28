@@ -1,0 +1,25 @@
+# Dev-only: PostgreSQL for ticket-mayo. Matches .env DATABASE_URL:
+#   postgresql://postgres:postgres@localhost:55432/ticket_mayo
+# Note: host ports 5432/5433 were already taken by other Postgres on this machine,
+# so the dev DB uses the uncommon 55432 to avoid conflicts.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ticket-mayo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticket_mayo
+    ports:
+      - "55432:5432"
+    volumes:
+      - ticket_mayo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_mayo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ticket_mayo_pgdata:
