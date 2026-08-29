@@ -365,6 +365,78 @@ describe('ContentClientService.mintForDistribution (wire-level)', () => {
   });
 });
 
+// ─── AC: getTicketQrTokens — batch QR tokens (P3, hết N+1) ───
+describe('ContentClientService.getTicketQrTokens (wire-level)', () => {
+  let service: ContentClientService;
+  let calls: FetchCall[];
+  let fetchImpl: (...args: unknown[]) => Promise<Response>;
+
+  beforeEach(() => {
+    service = new ContentClientService();
+    calls = [];
+    (globalThis as Record<string, unknown>).fetch = (...args: unknown[]) => {
+      calls.push({ url: args[0] as string, init: args[1] as RequestInit });
+      return fetchImpl(...args);
+    };
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).fetch;
+  });
+
+  const jsonResponse = (status: number, body: unknown) =>
+    Promise.resolve({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    } as Response);
+
+  it('POST /tickets/qr-tokens {ids} → Map id→token (unwrap {success,data.tokens})', async () => {
+    fetchImpl = () =>
+      jsonResponse(200, {
+        success: true,
+        data: { tokens: { 'tk-1': 'sig-1', 'tk-2': null } },
+      });
+
+    const out = await service.getTicketQrTokens(['tk-1', 'tk-2']);
+
+    expect(out.get('tk-1')).toBe('sig-1');
+    expect(out.get('tk-2')).toBeNull(); // endpoint trả null cho id fail — KHÔNG throw batch
+    expect(calls[0].url).toContain('/internal/distribution/tickets/qr-tokens');
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse((calls[0].init.body as string) ?? '')).toEqual({ ids: ['tk-1', 'tk-2'] });
+  });
+
+  it('chunk ≤ 500/call — 600 ids → 2 request, gộp kết quả cả 2 chunk', async () => {
+    const ids = Array.from({ length: 600 }, (_, i) => `tk-${i + 1}`);
+    fetchImpl = jest.fn((...args: unknown[]) => {
+      const body = JSON.parse(((args[1] as { body?: string }).body) ?? '{}') as {
+        ids: string[];
+      };
+      const tokens: Record<string, string> = {};
+      for (const id of body.ids) tokens[id] = `sig-${id}`;
+      return jsonResponse(200, { success: true, data: { tokens } });
+    });
+
+    const out = await service.getTicketQrTokens(ids);
+
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse((calls[0].init.body as string))).toEqual({ ids: ids.slice(0, 500) });
+    expect(JSON.parse((calls[1].init.body as string))).toEqual({ ids: ids.slice(500) });
+    expect(out.size).toBe(600);
+    expect(out.get('tk-1')).toBe('sig-tk-1');
+    expect(out.get('tk-600')).toBe('sig-tk-600');
+  });
+
+  it('request thất bại (5xx) → warn + bỏ chunk đó, KHÔNG throw (caller fallback)', async () => {
+    fetchImpl = () => jsonResponse(500, { message: 'down' });
+
+    const out = await service.getTicketQrTokens(['tk-1']);
+
+    expect(out.size).toBe(0);
+  });
+});
+
 // ─── AC: getTicketQrToken — static signed token QR tĩnh từ bảng Ticket ───
 describe('ContentClientService.getTicketQrToken (wire-level)', () => {
   let service: ContentClientService;

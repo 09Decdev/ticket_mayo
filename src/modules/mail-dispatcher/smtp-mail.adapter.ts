@@ -33,6 +33,11 @@ export class SmtpMailAdapter implements MailAdapter {
     // env.MAIL_PORT giữ nguyên là string (decorator transform không chạy trong buildEnv)
     const port = Number(env.MAIL_PORT);
     this.transporter = nodemailer.createTransport({
+      // P2: pool SMTP connections — gửi song song (dispatch concurrency 4) qua
+      // tối đa 5 connection, mỗi connection tối đa 100 messages rồi reconnect.
+      pool: true,
+      maxConnections: 5,
+      maxMessages: 100,
       host: env.MAIL_HOST,
       port,
       secure: port === 465,

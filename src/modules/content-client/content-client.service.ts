@@ -244,6 +244,38 @@ export class ContentClientService {
     }
   }
 
+  /** Chia mảng thành các chunk ≤ size (giữ thứ tự) — dùng cho batch QR tokens. */
+  private chunkArr<T>(arr: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+    return chunks;
+  }
+
+  /**
+   * Batch static signed QR tokens (P3 — hết N+1 resolveQrPayload HTTP/email):
+   * POST /internal/distribution/tickets/qr-tokens {ids} → {tokens: {id: token|null}}.
+   * Chunk ≤ 500/call; endpoint mỗi id fail → null (KHÔNG throw toàn batch);
+   * chunk request fail → warn + ids đó vắng mặt trong Map → caller fallback
+   * ticketCode/claimUrl (GIỮ semantic fail-soft của getTicketQrToken).
+   */
+  async getTicketQrTokens(ticketIds: string[]): Promise<Map<string, string | null>> {
+    const out = new Map<string, string | null>();
+    for (const chunk of this.chunkArr(ticketIds, 500)) {
+      try {
+        const data = await this.request<{ tokens: Record<string, string | null> }>(
+          '/internal/distribution/tickets/qr-tokens',
+          { method: 'POST', body: JSON.stringify({ ids: chunk }) },
+        );
+        for (const [id, t] of Object.entries(data?.tokens ?? {})) out.set(id, t ?? null);
+      } catch (err) {
+        this.logger.warn(
+          `[QR] getTicketQrTokens batch fail (${chunk.length} ids): ${(err as Error).message}`,
+        );
+      }
+    }
+    return out;
+  }
+
   // ─── T5 — Eager mint batch (C-1) ───
   /**
    * Mint batch vé email distribution (timeout 15s/call như các API khác).

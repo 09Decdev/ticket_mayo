@@ -1,3 +1,4 @@
+import { env } from '../../config/env';
 import { MailDispatcherService } from './mail-dispatcher.service';
 import { ClaimMailPayload } from './mail.adapter';
 
@@ -25,12 +26,13 @@ describe('MailDispatcherService — event banner CID inline', () => {
   let service: MailDispatcherService;
   let fetchMock: jest.Mock;
   let sendMock: jest.Mock;
+  let tokenMock: jest.Mock;
   const EVENT_URL = 'https://minio.local/event.jpg?X-Amz-Expires=7200';
 
   function makeService() {
     const service = new MailDispatcherService(
       { send: sendMock } as never,
-      { getTicketQrToken: jest.fn(async () => null) } as never,
+      { getTicketQrTokens: tokenMock } as never,
     );
     // Template giả — không phụ thuộc file trên disk.
     (service as unknown as { getTemplate: () => string }).getTemplate = () =>
@@ -48,6 +50,7 @@ describe('MailDispatcherService — event banner CID inline', () => {
     sendMock = jest.fn(async () => {
       /* adapter no-op */
     });
+    tokenMock = jest.fn(async () => new Map()); // batch mặc định: không có token nào
     service = makeService();
   });
 
@@ -130,76 +133,46 @@ describe('MailDispatcherService — event banner CID inline', () => {
     expect(p.html).toContain(`src="${DEFAULT_BANNER}"`);
   });
 
-  it('dispatch render có {{pdfUrl}} (nút "Tải vé PDF" trong email) → URL backend endpoint', async () => {
+  it('dispatch render có {{pdfUrl}} — link trỏ THẲNG content public (PDF tự content), có token + tên', async () => {
+    (service as unknown as { getTemplate: () => string }).getTemplate = () =>
+      '<a href="{{pdfUrl}}">tải</a>';
+    // JWS thật bắt đầu 'ey' (base64url JSON header) → được coi là signed token
+    tokenMock.mockResolvedValueOnce(new Map([['tk-1', 'eyJhbGciOiJFZERTQSIsImtpZCI6InQifQ.abc.def']]));
+    (env as unknown as { CONTENT_PUBLIC_BASE_URL: string }).CONTENT_PUBLIC_BASE_URL =
+      'https://content.example.com';
+
+    await service.dispatchBatch([
+      makePayload({
+        claimToken: 'tok-pdfx1',
+        ticketId: 'tk-1',
+        ticketCode: 'CODE-TK1',
+        customerName: 'Nguyễn Văn A',
+        customerPhone: '0966 555 888',
+        bookedAt: '28/08/2026 17:00',
+      }),
+    ]);
+
+    const p = sendMock.mock.calls[0][0] as ClaimMailPayload;
+    expect(p.html).toContain(
+      'https://content.example.com/content-service/tickets/tk-1/pdf?token=eyJhbGciOiJFZERTQSIsImtpZCI6InQifQ.abc.def',
+    );
+    expect(p.html).toContain('name='); // tên người nhận truyền kèm để PDF in đúng tên
+    expect(p.html).toContain('phone='); // SĐT — PII truyền qua URL để PDF in đủ thông tin
+    expect(p.html).toContain('email='); // email người nhận (content không lưu PII)
+    expect(p.html).toContain('bookedAt='); // thời gian đặt vé
+    expect(p.html).not.toContain('/ticket-mayo/tickets/pdf/'); // KHÔNG còn endpoint ticket-mayo
+  });
+
+  it('không có CONTENT_PUBLIC_BASE_URL / không có ticketId → pdfUrl fallback claimUrl', async () => {
     (service as unknown as { getTemplate: () => string }).getTemplate = () =>
       '<a href="{{pdfUrl}}">tải</a>';
 
-    await service.dispatchBatch([makePayload({ claimToken: 'tok-pdfx1' })]);
+    await service.dispatchBatch([
+      makePayload({ claimToken: 'tok-pdfx2', claimUrl: 'http://localhost:5174/c/tok-pdfx2' }),
+    ]);
 
     const p = sendMock.mock.calls[0][0] as ClaimMailPayload;
-    expect(p.html).toContain('/ticket-mayo/tickets/pdf/tok-pdfx1');
-  });
-});
-
-// ─── AC: buildPdfHtml — HTML standalone cho nút "Tải vé PDF" (mọi ảnh data-URI) ───
-describe('MailDispatcherService — buildPdfHtml (PDF của đúng template email)', () => {
-  let service: MailDispatcherService;
-  let fetchMock: jest.Mock;
-  const EVENT_URL = 'https://minio.local/event.jpg?X-Amz-Expires=7200';
-
-  function makeService() {
-    const service = new MailDispatcherService(
-      { send: jest.fn() } as never,
-      { getTicketQrToken: jest.fn(async () => null) } as never,
-    );
-    (service as unknown as { getTemplate: () => string }).getTemplate = () =>
-      '<a href="{{pdfUrl}}">tải</a><img src="{{bannerUrl}}"><img src="{{qrUrl}}"><img src="{{logoUrl}}">';
-    (service as unknown as { generateQrWithLogo: () => Promise<Buffer> }).generateQrWithLogo =
-      jest.fn(async () => Buffer.from('fake-qr'));
-    return service;
-  }
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    fetchMock = jest.fn();
-    (globalThis as { fetch: unknown }).fetch = fetchMock;
-    service = makeService();
-  });
-
-  afterEach(() => {
-    delete (globalThis as { fetch?: unknown }).fetch;
-  });
-
-  it('tất cả ảnh là data-URI (KHÔNG còn cid: / URL presigned), pdfUrl đã fill', async () => {
-    const html = await service.buildPdfHtml(makePayload({ claimToken: 'tok-pdf1' }));
-
-    expect(html).not.toContain('cid:');
-    expect(html).toContain('data:image/png;base64,'); // QR base64
-    expect(html).toContain('data:image/jpeg;base64,'); // banner gradient fallback (sharp)
-    expect(html).toContain('/ticket-mayo/tickets/pdf/tok-pdf1');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('có eventImage → banner fetch thành data-URI, không lộ URL presigned', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      headers: { get: () => 'image/jpeg' },
-      arrayBuffer: async () => new ArrayBuffer(8),
-    });
-
-    const html = await service.buildPdfHtml(makePayload({ eventImage: EVENT_URL }));
-
-    expect(html).not.toContain(EVENT_URL);
-    expect(html).toContain('data:image/jpeg;base64,');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('eventImage fetch lỗi → banner gradient fallback, KHÔNG throw', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 403, headers: { get: () => '' } });
-
-    const html = await service.buildPdfHtml(makePayload({ eventImage: EVENT_URL }));
-
-    expect(html).toContain('data:image/jpeg;base64,');
+    expect(p.html).toContain('http://localhost:5174/c/tok-pdfx2');
   });
 });
 
@@ -211,7 +184,7 @@ describe('MailDispatcherService — QR static signed token (content API)', () =>
 
   function makeService() {
     service = new MailDispatcherService({ send: jest.fn() } as never, {
-      getTicketQrToken: tokenMock,
+      getTicketQrTokens: tokenMock,
     } as never);
     (service as unknown as { getTemplate: () => string }).getTemplate = () => '<img src="{{qrUrl}}">';
     qrMock = jest.fn(async () => Buffer.from('fake-qr'));
@@ -221,23 +194,24 @@ describe('MailDispatcherService — QR static signed token (content API)', () =>
   }
 
   beforeEach(() => {
-    tokenMock = jest.fn(async () => null);
+    tokenMock = jest.fn(async () => new Map()); // batch mặc định: không có token nào
     service = makeService();
   });
 
   it('payload có ticketId + content trả token → QR encode SIGNED TOKEN (không phải claimUrl)', async () => {
-    tokenMock.mockResolvedValueOnce('signed-token-abc123');
+    tokenMock.mockResolvedValueOnce(new Map([['tk-1', 'signed-token-abc123']]));
 
     await service.dispatchBatch([
       makePayload({ claimToken: 'tok-1', ticketId: 'tk-1', ticketCode: 'CODE-TK1' }),
     ]);
 
-    expect(tokenMock).toHaveBeenCalledWith('tk-1');
+    expect(tokenMock).toHaveBeenCalledWith(['tk-1']);
     expect(qrMock).toHaveBeenCalledWith('signed-token-abc123');
   });
 
   it('content lỗi/null token → fallback QR encode ticketCode thật', async () => {
-    tokenMock.mockResolvedValueOnce(null);
+    // content trả token null cho id → cache null → fallback QR encode ticketCode thật
+    tokenMock.mockResolvedValueOnce(new Map([['tk-1', null]]));
 
     await service.dispatchBatch([
       makePayload({ claimToken: 'tok-1', ticketId: 'tk-1', ticketCode: 'CODE-TK1' }),
@@ -251,14 +225,5 @@ describe('MailDispatcherService — QR static signed token (content API)', () =>
 
     expect(tokenMock).not.toHaveBeenCalled();
     expect(qrMock).toHaveBeenCalledWith('http://localhost:5174/c/tok-1');
-  });
-
-  it('buildPdfHtml cũng dùng signed token (payload có ticketId)', async () => {
-    tokenMock.mockResolvedValueOnce('signed-token-pdf');
-
-    await service.buildPdfHtml(makePayload({ claimToken: 'tok-1', ticketId: 'tk-1' }));
-
-    expect(tokenMock).toHaveBeenCalledWith('tk-1');
-    expect(qrMock).toHaveBeenCalledWith('signed-token-pdf');
   });
 });

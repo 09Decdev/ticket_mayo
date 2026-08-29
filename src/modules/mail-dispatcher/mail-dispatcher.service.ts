@@ -3,10 +3,10 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import QRCode from 'qrcode';
 import sharp from 'sharp';
-import { env, NodeEnv } from '../../config/env';
+import { env } from '../../config/env';
 import { ContentClientService } from '../content-client/content-client.service';
 import { CidAttachment, ClaimMailPayload, MailAdapter } from './mail.adapter';
-import { renderTicketEmailHtml, TicketEmailBrandContext } from './ticket-email.renderer';
+import { renderTicketEmailHtml } from './ticket-email.renderer';
 
 const TEMPLATE_PATH = join(
   process.cwd(),
@@ -25,6 +25,29 @@ const CID_DOWNLOAD_ICON = 'download-icon@ticket';
 /** Ảnh event > ngưỡng này → bỏ qua (email vượt giới hạn kích thước Gmail/Outlook). */
 const MAX_EVENT_IMAGE_BYTES = 3 * 1024 * 1024;
 const EVENT_IMAGE_FETCH_TIMEOUT_MS = 10_000;
+
+/** Số payload xử lý đồng thời trong 1 đợt (P2 — tránh dồn CPU/sharp + SMTP cùng lúc). */
+const MAIL_DISPATCH_CONCURRENCY = 4;
+
+/**
+ * Chạy tối đa `limit` task đồng thời. Callback nhận (item, index) — caller ghi
+ * kết quả theo index để giữ đúng thứ tự input (results[] không đảo).
+ */
+async function runConcurrent<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+}
 
 /**
  * Dispatches ticket emails. The concrete adapter (console | kafka | smtp) is
@@ -46,9 +69,15 @@ export class MailDispatcherService {
   private timeIconBuf: Buffer | null = null;
   private locationIconBuf: Buffer | null = null;
   private downloadIconBuf: Buffer | null = null;
+  /** QR logo 60×60 sau resize — resize 1 lần (P5), tái dùng cho mọi QR. */
+  private qrLogoResizedBuf: Buffer | null = null;
 
-  /** Banner gradient fallback cho PDF (render 1 lần qua sharp rồi cache). */
-  private defaultBannerDataUriCache: string | null = null;
+  /**
+   * LRU cache QR signed token theo ticketId (P3). Token tĩnh đến hết giờ event,
+   * verify chỉ dựa sig + ticketId → cache an toàn xuyên batch (đã verify REVIEW).
+   */
+  private readonly qrTokenCache = new Map<string, string | null>();
+  private static readonly QR_TOKEN_CACHE_CAP = 5000;
 
   constructor(
     private readonly adapter: MailAdapter,
@@ -201,16 +230,45 @@ export class MailDispatcherService {
     }
   }
 
+  /** get LRU: hit → re-insert để đánh dấu recency. Miss → undefined. */
+  private qrTokenCacheGet(ticketId: string): string | null | undefined {
+    if (!this.qrTokenCache.has(ticketId)) return undefined;
+    const v = this.qrTokenCache.get(ticketId) ?? null;
+    this.qrTokenCache.delete(ticketId);
+    this.qrTokenCache.set(ticketId, v);
+    return v;
+  }
+
+  /** set LRU: quá cap → evict key cũ nhất (Map giữ thứ tự chèn). */
+  private qrTokenCacheSet(ticketId: string, token: string | null): void {
+    if (this.qrTokenCache.has(ticketId)) this.qrTokenCache.delete(ticketId);
+    this.qrTokenCache.set(ticketId, token);
+    if (this.qrTokenCache.size > MailDispatcherService.QR_TOKEN_CACHE_CAP) {
+      const oldest = this.qrTokenCache.keys().next().value;
+      if (oldest !== undefined) this.qrTokenCache.delete(oldest);
+    }
+  }
+
+  /** Logo 60×60 resize 1 lần (P5) rồi tái dùng — tránh sharp resize mỗi vé. */
+  private async getQrLogoResizedBuf(): Promise<Buffer | null> {
+    if (this.qrLogoResizedBuf !== null) return this.qrLogoResizedBuf;
+    const logoBuf = this.getQrLogoBuf();
+    if (!logoBuf) return null;
+    this.qrLogoResizedBuf = await sharp(logoBuf).resize(60, 60).toBuffer();
+    return this.qrLogoResizedBuf;
+  }
+
   /**
    * Nội dung QR trên vé = STATIC SIGNED TOKEN từ content-service (offline-checkin
    * v1.1 — getStaticQrToken, self-verifying, exp = hết giờ event; QR TĨNH không
-   * phải link web). Chọn: content token (qua ticketId) → ticketCode → claimUrl.
-   * Lỗi content → fallback, KHÔNG fail gửi email/PDF.
+   * phải link web). Chọn: token trong LRU cache (prefetch batch trước loop)
+   * → ticketCode → claimUrl. Cache miss / content fail → fallback, KHÔNG fail
+   * gửi email/PDF.
    */
-  private async resolveQrPayload(p: ClaimMailPayload): Promise<string> {
+  private resolveQrPayload(p: ClaimMailPayload): string {
     if (p.ticketId) {
-      const token = await this.content.getTicketQrToken(p.ticketId);
-      if (token) return token;
+      const cached = this.qrTokenCacheGet(p.ticketId);
+      if (cached) return cached;
     }
     return p.ticketCode || p.claimUrl;
   }
@@ -223,13 +281,13 @@ export class MailDispatcherService {
       width: 300,
       color: { dark: '#1e1b2e', light: '#ffffff' },
     });
-    const logoBuf = this.getQrLogoBuf();
-    if (!logoBuf) return qrBuffer;
+    const logoResizedBuf = await this.getQrLogoResizedBuf();
+    if (!logoResizedBuf) return qrBuffer;
 
     return await sharp(qrBuffer)
       .composite([
         {
-          input: await sharp(logoBuf).resize(60, 60).toBuffer(),
+          input: logoResizedBuf,
           gravity: 'center',
         },
       ])
@@ -301,15 +359,41 @@ export class MailDispatcherService {
     const cidAttachments = this.buildCidAttachments();
     // Cache ảnh event per-URL trong 1 đợt (cùng event → fetch 1 lần).
     const eventImageCache = new Map<string, { mime: string; buf: Buffer } | null>();
+    // Chỉ payload chưa render mới cần QR + ảnh — prefetch đúng phần đó (payload
+    // đã có html pre-rendered không đụng content/fetch như trước).
+    const toDispatch = payloads.filter((p) => !p.html);
+
+    // P3: prefetch QR signed token theo ticketId — 1 batch call thay N call
+    // (chunk ≤500 nội bộ content-client); merge vào LRU cache trước loop.
+    const missingTicketIds = [
+      ...new Set(toDispatch.map((p) => p.ticketId).filter((id): id is string => !!id)),
+    ].filter((id) => !this.qrTokenCache.has(id));
+    if (missingTicketIds.length > 0) {
+      for (const [id, token] of await this.content.getTicketQrTokens(missingTicketIds)) {
+        this.qrTokenCacheSet(id, token);
+      }
+    }
+
+    // P6: prefetch ảnh event trước loop → payload cùng event không chờ fetch
+    // trong loop (fetch lỗi cache null → loop fallback banner như cũ).
+    await Promise.all(
+      [
+        ...new Set(toDispatch.map((p) => p.eventImage).filter((u): u is string => !!u)),
+      ].map((u) => this.fetchEventImage(u, eventImageCache)),
+    );
+
     let dispatched = 0;
     let failed = 0;
     const results: { claimToken: string; ok: boolean }[] = [];
-    for (const p of payloads) {
+    // P2: concurrency giới hạn (4) — QR gen + fetch ảnh + render + send chạy
+    // song song; results ghi theo index → thứ tự y hệt payload order.
+    await runConcurrent(payloads, MAIL_DISPATCH_CONCURRENCY, async (p, i) => {
       try {
         if (!p.html) {
-          // QR: signed static token (content) with logo, attach as CID
+          // QR: signed static token (content — LRU cache) with logo, attach as CID
           const qrCid = `qr-${p.claimToken}`;
-          const qrBuffer = await this.generateQrWithLogo(await this.resolveQrPayload(p));
+          const qrContent = this.resolveQrPayload(p);
+          const qrBuffer = await this.generateQrWithLogo(qrContent);
           const qrUrl = `cid:${qrCid}`;
 
           const attachments: CidAttachment[] = [
@@ -349,7 +433,7 @@ export class MailDispatcherService {
             supportPhone: env.SUPPORT_PHONE as string,
             appStoreUrl: env.APP_STORE_URL as string,
             googlePlayUrl: env.GOOGLE_PLAY_URL as string,
-            pdfUrl: this.buildTicketPdfUrl(p.claimToken),
+            pdfUrl: await this.buildTicketPdfUrl(p, qrContent),
             timeIconUrl: `cid:${CID_TIME_ICON}`,
             locationIconUrl: `cid:${CID_LOCATION_ICON}`,
             downloadIconUrl: `cid:${CID_DOWNLOAD_ICON}`,
@@ -357,15 +441,15 @@ export class MailDispatcherService {
         }
         await this.adapter.send(p);
         dispatched++;
-        results.push({ claimToken: p.claimToken, ok: true });
+        results[i] = { claimToken: p.claimToken, ok: true };
       } catch (err) {
         failed++;
-        results.push({ claimToken: p.claimToken, ok: false });
+        results[i] = { claimToken: p.claimToken, ok: false };
         this.logger.error(
           `mail send failed job=${p.jobId} token=${p.claimToken}: ${(err as Error).message}`,
         );
       }
-    }
+    });
     this.logger.log(
       `dispatchBatch done dispatched=${dispatched} failed=${failed} total=${payloads.length}`,
     );
@@ -377,98 +461,25 @@ export class MailDispatcherService {
   }
 
   /**
-   * URL endpoint sinh PDF vé (nút "Tải vé PDF" trong email). Base = env
-   * TICKET_MAYO_BASE_URL (public) → dev: localhost backend → PUBLIC_BASE_URL.
+   * URL "Tải vé PDF" — trỏ THẲNG content-service public (PDF render TẠI
+   * CONTENT, verify bằng signed token; ticket-mayo không cần public).
+   * qrContent là static signed token (bắt đầu 'ey' base64url JWS) → dùng làm
+   * bearer secret + thả name/phone/email/bookedAt qua query để PDF in đúng
+   * thông tin người đặt (PII theo yêu cầu, content không lưu — PRD §7.1 D3).
+   * Không có ticketId/token (retry job fail, vé chưa mint) → fallback claimUrl.
    */
-  buildTicketPdfUrl(claimToken: string): string {
-    const raw = (env.TICKET_MAYO_BASE_URL ?? '').trim();
-    const base =
-      raw !== ''
-        ? raw
-        : env.NODE_ENV === NodeEnv.Development
-          ? `http://localhost:${env.PORT}`
-          : env.PUBLIC_BASE_URL;
-    return `${base.replace(/\/+$/, '')}/ticket-mayo/tickets/pdf/${claimToken}`;
-  }
-
-  private static toDataUri(buf: Buffer, mime: string): string {
-    return `data:${mime};base64,${buf.toString('base64')}`;
-  }
-
-  /** Banner mặc định (gradient) cho PDF — tạo 1 lần qua sharp, base64 cache. */
-  private async defaultBannerDataUri(): Promise<string> {
-    if (this.defaultBannerDataUriCache !== null) return this.defaultBannerDataUriCache;
-    const svg =
-      '<svg width="600" height="313" xmlns="http://www.w3.org/2000/svg">' +
-      '<rect width="600" height="313" fill="#1e1b2e"/>' +
-      '<circle cx="490" cy="90" r="100" fill="#8b5cf6" opacity="0.55"/>' +
-      '<circle cx="90" cy="280" r="70" fill="#4f46e5" opacity="0.4"/>' +
-      '<text x="40" y="175" font-family="Segoe UI, Arial, sans-serif" font-size="36" font-weight="700" fill="#ffffff">MAYogu</text>' +
-      '<text x="40" y="215" font-family="Segoe UI, Arial, sans-serif" font-size="18" fill="#c7cbe2">Vé điện tử sự kiện</text>' +
-      '</svg>';
-    const png = await sharp({
-      create: { width: 600, height: 313, channels: 3, background: { r: 30, g: 27, b: 46 } },
-    })
-      .composite([{ input: Buffer.from(svg) }])
-      .jpeg({ quality: 88 })
-      .toBuffer();
-    this.defaultBannerDataUriCache = MailDispatcherService.toDataUri(png, 'image/jpeg');
-    return this.defaultBannerDataUriCache;
-  }
-
-  /**
-   * HTML standalone của đúng template email (BẢN PDF) — mọi ảnh là data-URI
-   * (CID không hiển thị được ngoài email client): QR + banner (fetch mới; presigned
-   * trả lại tươi từ content-service) + logo/notice icon. Dùng cho endpoint
-   * "Tải vé PDF" trong email — PDF là bản PDF-giống-hệt template gửi.
-   */
-  async buildPdfHtml(p: ClaimMailPayload): Promise<string> {
-    const template = this.getTemplate();
-    // PDF dùng QR signed static token (giống email) — scan trả về credential vé.
-    const qrBuffer = await this.generateQrWithLogo(await this.resolveQrPayload(p));
-    const banner = p.eventImage ? await this.fetchEventImage(p.eventImage, new Map()) : null;
-    const bannerUri = banner
-      ? MailDispatcherService.toDataUri(banner.buf, banner.mime)
-      : await this.defaultBannerDataUri();
-
-    const logoUri = this.resolveEnvOrDataUri(
-      env.BRAND_LOGO_URL ?? '',
-      this.getLogoBuf(),
-      'image/png',
-    );
-    const noticeRaw = (env.NOTICE_ICON_URL ?? '').startsWith('https://placehold')
-      ? ''
-      : (env.NOTICE_ICON_URL ?? '');
-    const noticeUri = this.resolveEnvOrDataUri(noticeRaw, this.getNoticeIconBuf(), 'image/png');
-
-    const timeUri = this.resolveEnvOrDataUri('', this.getTimeIconBuf(), 'image/png');
-    const locationUri = this.resolveEnvOrDataUri('', this.getLocationIconBuf(), 'image/png');
-    const downloadUri = this.resolveEnvOrDataUri('', this.getDownloadIconBuf(), 'image/png');
-
-    return renderTicketEmailHtml(
-      template,
-      p,
-      {
-        qrUrl: MailDispatcherService.toDataUri(qrBuffer, 'image/png'),
-        bannerUrl: bannerUri,
-        noticeIconUrl: noticeUri,
-        logoUrl: logoUri,
-        supportEmail: env.SUPPORT_EMAIL as string,
-        supportPhone: env.SUPPORT_PHONE as string,
-        appStoreUrl: env.APP_STORE_URL as string,
-        googlePlayUrl: env.GOOGLE_PLAY_URL as string,
-        pdfUrl: this.buildTicketPdfUrl(p.claimToken),
-        timeIconUrl: timeUri,
-        locationIconUrl: locationUri,
-        downloadIconUrl: downloadUri,
-      } satisfies TicketEmailBrandContext,
-    );
-  }
-
-  /** Env URL set → dùng luôn (CDN prod). Chưa có → data-URI từ buffer local; trống → 1px (tránh ảnh gãy). */
-  private resolveEnvOrDataUri(envUrl: string, buf: Buffer | null, mime: string): string {
-    if (envUrl.trim() !== '') return envUrl;
-    if (buf) return MailDispatcherService.toDataUri(buf, mime);
-    return 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  buildTicketPdfUrl(p: ClaimMailPayload, qrContent: string): string {
+    if (p.ticketId && qrContent.startsWith('ey')) {
+      const base = (env.CONTENT_PUBLIC_BASE_URL ?? '').trim();
+      if (base !== '') {
+        const params = new URLSearchParams({ token: qrContent });
+        if (p.customerName) params.set('name', p.customerName);
+        if (p.customerPhone) params.set('phone', p.customerPhone);
+        if (p.email) params.set('email', p.email);
+        if (p.bookedAt) params.set('bookedAt', p.bookedAt);
+        return `${base.replace(/\/+$/, '')}/content-service/tickets/${encodeURIComponent(p.ticketId)}/pdf?${params.toString()}`;
+      }
+    }
+    return p.claimUrl;
   }
 }

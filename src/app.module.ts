@@ -11,7 +11,6 @@ import { CheckInModule } from './modules/check-in/check-in.module';
 import { StatsModule } from './modules/stats/stats.module';
 import { TicketPortalModule } from './modules/ticket-portal/ticket-portal.module';
 import { ClaimModule } from './modules/claim/claim.module';
-import { TicketPdfModule } from './modules/ticket-pdf/ticket-pdf.module';
 
 @Module({
   imports: [
@@ -27,7 +26,6 @@ import { TicketPdfModule } from './modules/ticket-pdf/ticket-pdf.module';
     StatsModule,
     TicketPortalModule,
     ClaimModule,
-    TicketPdfModule,
   ],
 })
 export class AppModule {}

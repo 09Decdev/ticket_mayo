@@ -71,6 +71,15 @@ class EnvConfig {
   INTERNAL_SERVICE_TOKEN?: string;
 
   /**
+   * Base URL PUBLIC của content-service (link người nhận bấm được, vd domain
+   * prod có reverse proxy). Dùng cho nút "Tải vé PDF" (email) — PDF render
+   * NGAY TẠI CONTENT, không cần ticket-mayo public. Trống → fallback claimUrl.
+   */
+  @IsOptional()
+  @IsString()
+  CONTENT_PUBLIC_BASE_URL?: string;
+
+  /**
    * Khóa ký HMAC-SHA256 recipient cho mint API (Δ11 VB3-2) — BẮT BUỘC:
    * mọi đợt phát vé đều mint ngay trong distribute() trước khi gửi email.
    * ≥32 chars, PHẢI khớp MINT_SIGNING_KEY của content-service, RIÊNG —
@@ -159,6 +168,7 @@ function loadRaw(): RawEnv {
     CONTENT_SERVICE_BASE_URL:
       process.env.CONTENT_SERVICE_BASE_URL ?? 'http://localhost:30041',
     INTERNAL_SERVICE_TOKEN: process.env.INTERNAL_SERVICE_TOKEN ?? '',
+    CONTENT_PUBLIC_BASE_URL: process.env.CONTENT_PUBLIC_BASE_URL ?? '',
     MINT_SIGNING_KEY: process.env.MINT_SIGNING_KEY ?? '',
     USER_COMMUNITY_BASE_URL:
       process.env.USER_COMMUNITY_BASE_URL ?? 'http://localhost:3001',
