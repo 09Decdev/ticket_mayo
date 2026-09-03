@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query,
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { EventService } from './event.service';
-import { CreateTicketTypeDto } from './dtos/create-ticket-type.dto';
+import { CreateTicketTypeDto, UpdateTicketTypeBasicDto } from './dtos/create-ticket-type.dto';
 import { UpdateTicketTypeDto } from './dtos/update-ticket-type.dto';
 
 @ApiTags('admin/ticket-types')
@@ -30,5 +30,20 @@ export class TicketTypeController {
   @ApiOperation({ summary: 'Update a ticket type' })
   update(@Param('id') id: string, @Body() dto: UpdateTicketTypeDto) {
     return this.eventService.updateTicketType(id, dto);
+  }
+
+  @Get(':id/basic')
+  @ApiOperation({ summary: 'Get one ticket type for edit screen (name/quantity/sold)' })
+  getForEdit(@Param('id') id: string) {
+    return this.eventService.getTicketTypeForEdit(id);
+  }
+
+  @Patch(':id/basic')
+  @ApiOperation({
+    summary:
+      'Update ticket type basic info (name + quantity only) — content validate quantity >= sold',
+  })
+  updateBasic(@Param('id') id: string, @Body() dto: UpdateTicketTypeBasicDto) {
+    return this.eventService.updateTicketTypeBasic(id, dto);
   }
 }

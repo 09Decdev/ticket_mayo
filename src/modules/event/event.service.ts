@@ -2,7 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { ContentClientService } from '../content-client/content-client.service';
 import { CreateEventDto } from './dtos/create-event.dto';
 import { UpdateEventDto } from './dtos/update-event.dto';
-import { CreateTicketTypeDto } from './dtos/create-ticket-type.dto';
+import {
+  CreateTicketTypeDto,
+  UpdateTicketTypeBasicDto,
+} from './dtos/create-ticket-type.dto';
 import { UpdateTicketTypeDto } from './dtos/update-ticket-type.dto';
 
 type ContentEvent = {
@@ -111,9 +114,22 @@ export class EventService {
     return this.mapTicketType(updated);
   }
 
+  /**
+   * Edit screen admin: sửa CHỈ name + quantity qua PATCH .../basic của content.
+   * Content validate quantity >= sold ở service layer (không tin client) —
+   * vi phạm → 400 TICKET_TYPE_QUANTITY_BELOW_SOLD (HttpException pass-through
+   * kèm sold trong response body — frontend hiển thị min quantity).
+   */
+  async updateTicketTypeBasic(id: string, dto: { name: string; quantity: number }) {
+    const updated = await this.content.updateTicketTypeBasic(id, {
+      name: dto.name,
+      quantity: dto.quantity,
+    });
+    return this.mapTicketType(updated);
+  }
+
   /** Resolve một ticket type (kèm event + số lượng) — dùng cho snapshot khi phát vé. */
-  async getTicketTypeWithEvent(ticketTypeId: string): Promise<{
-    id: string;
+  async getTicketTypeWithEvent(ticketTypeId: string): Promise<{    id: string;
     eventId: string;
     name: string;
     eventName: string;
@@ -124,6 +140,7 @@ export class EventService {
     quantity: number;
     sold: number;
     remaining: number;
+    maxTicketsPerUser: number | null;
   }> {
     const tt = await this.content.getTicketType(ticketTypeId);
     if (!tt) throw new NotFoundException(`Ticket type ${ticketTypeId} not found.`);
@@ -139,6 +156,25 @@ export class EventService {
       quantity: tt.quantity,
       sold: tt.sold,
       remaining: tt.remaining,
+      maxTicketsPerUser: tt.maxTicketsPerUser ?? null,
+    };
+  }
+
+  /**
+   * Dữ liệu cho edit screen admin: CHỈ các field cần để sửa name + quantity
+   * (sold hiển thị read-only làm min quantity, remaining để hint).
+   */
+  async getTicketTypeForEdit(id: string) {
+    const tt = await this.content.getTicketType(id);
+    if (!tt) throw new NotFoundException(`Ticket type ${id} not found.`);
+    return {
+      id: tt.id,
+      eventId: tt.eventId,
+      name: tt.name,
+      quantity: tt.quantity,
+      sold: tt.sold,
+      remaining: tt.remaining,
+      eventName: tt.event?.title ?? null,
     };
   }
 

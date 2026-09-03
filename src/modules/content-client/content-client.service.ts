@@ -50,6 +50,8 @@ const PASSABLE_ERROR_CODES = new Set([
   'TICKET_QUOTA_EXCEEDED',
   'INVALID_PRETICKET_SIGNATURE',
   'DUPLICATE_PRETICKET_ID',
+  // Edit ticket: 400 quantity < sold — kèm sold để UI hiển thị min quantity.
+  'TICKET_TYPE_QUANTITY_BELOW_SOLD',
 ]);
 
 /** Số recipient tối đa / mint call (chunk client-side, ≤ max 1000 của content DTO). */
@@ -103,6 +105,7 @@ export class ContentClientService {
         let bizCode: string | undefined;
         let remaining: number | undefined;
         let requested: number | undefined;
+        let sold: number | undefined;
         try {
           const body = (await res.json()) as {
             message?: string;
@@ -122,6 +125,10 @@ export class ContentClientService {
           if (typeof body?.requested === 'number') {
             requested = body.requested;
           }
+          // VÉ-EDIT: sold từ 400 TICKET_TYPE_QUANTITY_BELOW_SOLD — cùng whitelist M7.
+          if (typeof body?.sold === 'number') {
+            sold = body.sold;
+          }
         } catch {
           /* non-JSON error body */
         }
@@ -137,6 +144,7 @@ export class ContentClientService {
               code: bizCode,
               ...(remaining !== undefined ? { remaining } : {}),
               ...(requested !== undefined ? { requested } : {}),
+              ...(sold !== undefined ? { sold } : {}),
             },
             res.status,
           );
@@ -213,6 +221,20 @@ export class ContentClientService {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
+  }
+  /**
+   * Edit screen admin: sửa CHỈ name + quantity (PATCH .../basic ở content).
+   * Content validate quantity >= sold (service layer) — vi phạm → 400
+   * TICKET_TYPE_QUANTITY_BELOW_SOLD kèm sold trong body (pass-through Δ7).
+   */
+  updateTicketTypeBasic(id: string, body: { name: string; quantity: number }) {
+    return this.request<any>(
+      `/internal/distribution/ticket-types/${encodeURIComponent(id)}/basic`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      },
+    );
   }
 
   // ─── Issuance ───

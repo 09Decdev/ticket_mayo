@@ -5,6 +5,7 @@ import { DistributionDraftProvider } from './admin/DistributionDraftContext';
 import { AdminLoginPage } from './admin/AdminLoginPage';
 import { EventsPage } from './admin/EventsPage';
 import { TicketTypesPage } from './admin/TicketTypesPage';
+import { EditTicketTypePage } from './admin/EditTicketTypePage';
 import { ImportEmailListPage } from './admin/ImportEmailListPage';
 import { SelectEventStep } from './admin/SelectEventStep';
 import { SelectTicketTypeStep } from './admin/SelectTicketTypeStep';
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/admin/distribute/confirm" element={<ConfirmDistributionStep />} />
           <Route path="/admin/events" element={<EventsPage />} />
           <Route path="/admin/ticket-types" element={<TicketTypesPage />} />
+          <Route path="/admin/ticket-types/:id/edit" element={<EditTicketTypePage />} />
           <Route path="/admin/distributions" element={<DistributionsListPage />} />
           <Route path="/admin/distributions/:jobId" element={<DistributionDetailPage />} />
           <Route path="/admin/stats" element={<AnalyticsDashboardPage />} />

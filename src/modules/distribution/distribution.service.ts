@@ -80,6 +80,22 @@ export class DistributionService {
     // 4. Build PreTicket seeds — quantity PreTickets per recipient, each with
     //    its OWN claim token/link, so "2 vé → 2 email, 3 vé → 3 email".
     const quantity = Math.max(1, dto.quantity ?? 1);
+    // 4a. Cap số vé/người theo ticket type (maxTicketsPerUser) — luồng admin phát
+    //     vé cũng phải tuân, không để lách qua giới hạn áp ở luồng mua (content
+    //     ticket.service). null = không giới hạn. Chặn TRƯỚC khi tạo job/PreTicket.
+    //     (Chỉ chặn input hiện tại — chưa đối chiếu lịch sử vé đã phát cho email
+    //     này; mint vẫn là lớp cuối chống race stock.)
+    if (tt.maxTicketsPerUser != null && quantity > tt.maxTicketsPerUser) {
+      this.logger.warn(
+        `[DISTRIBUTE] PER-USER CAP FAIL ticketType=${tt.id} quantity=${quantity} maxTicketsPerUser=${tt.maxTicketsPerUser}`,
+      );
+      throw new ConflictException({
+        code: 'MAX_TICKETS_PER_USER_EXCEEDED',
+        message: `Mỗi người chỉ nhận tối đa ${tt.maxTicketsPerUser} vé cho loại vé này (yêu cầu ${quantity}).`,
+        maxTicketsPerUser: tt.maxTicketsPerUser,
+        requested: quantity,
+      });
+    }
     const jobId = generateJobId();
     const seeds = recipients.flatMap((email) =>
       Array.from({ length: quantity }, () => ({

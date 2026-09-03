@@ -168,4 +168,6 @@ export interface ApiError {
   /** T5: 409 quota body — {code, remaining, requested} (nếu có). */
   remaining?: number;
   requested?: number;
+  /** VÉ-EDIT: 400 TICKET_TYPE_QUANTITY_BELOW_SOLD — số vé đã bán (min quantity). */
+  sold?: number;
 }

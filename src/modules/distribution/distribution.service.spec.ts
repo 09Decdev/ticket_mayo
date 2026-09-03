@@ -92,6 +92,7 @@ describe('DistributionService — EAGER mint flow (T5)', () => {
     quantity: 1000,
     sold: 0,
     remaining: 1000,
+    maxTicketsPerUser: null,
   };
 
   const ADMIN = 'admin-1';
@@ -682,6 +683,48 @@ describe('DistributionService — EAGER mint flow (T5)', () => {
       expect(jobs).toHaveLength(1);
       expect(preTickets.filter((p) => p.jobId === jobs[0].id)).toHaveLength(2);
       expect(mintCalls).toHaveLength(1);
+    });
+  });
+
+  // ─── AC: cap số vé/người theo ticket type (maxTicketsPerUser) — luồng admin phát vé ───
+  describe('per-user cap (409 MAX_TICKETS_PER_USER_EXCEEDED)', () => {
+    it('maxTicketsPerUser=2, nhập quantity=3 → 409 code, KHÔNG tạo job/PreTicket/mint/email', async () => {
+      mocks()
+        .eventService.getTicketTypeWithEvent.mockResolvedValueOnce({ ...TT, maxTicketsPerUser: 2 });
+
+      await expect(
+        service.distribute(makeDto([EMAIL_USER, EMAIL_GUEST], 3), ADMIN),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'MAX_TICKETS_PER_USER_EXCEEDED', maxTicketsPerUser: 2, requested: 3 },
+      });
+
+      expect(jobs).toHaveLength(0);
+      expect(preTickets).toHaveLength(0);
+      expect(mintCalls).toHaveLength(0);
+      expect(mocks().mailDispatcher.dispatchBatch).not.toHaveBeenCalled();
+    });
+
+    it('boundary: quantity = đúng maxTicketsPerUser → distribute bình thường (chỉ chặn khi >)', async () => {
+      mocks()
+        .eventService.getTicketTypeWithEvent.mockResolvedValueOnce({ ...TT, maxTicketsPerUser: 2 });
+
+      const res = await service.distribute(makeDto([EMAIL_USER, EMAIL_GUEST], 2), ADMIN);
+      expect(res).toBeTruthy();
+      expect(jobs).toHaveLength(1);
+      expect(preTickets.filter((p) => p.jobId === jobs[0].id)).toHaveLength(4); // 2 email × 2 vé
+    });
+
+    it('maxTicketsPerUser=null (không giới hạn) → quantity cao vẫn OK trong cap DTO', async () => {
+      mocks()
+        .eventService.getTicketTypeWithEvent.mockResolvedValueOnce({
+          ...TT,
+          maxTicketsPerUser: null,
+        });
+
+      const res = await service.distribute(makeDto([EMAIL_USER], 5), ADMIN);
+      expect(res).toBeTruthy();
+      expect(preTickets.filter((p) => p.jobId === jobs[0].id)).toHaveLength(5);
     });
   });
 

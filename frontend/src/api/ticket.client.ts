@@ -138,6 +138,26 @@ export const ticketClient = {
       throw toApiError(e);
     }
   },
+  /** Edit screen: lấy 1 ticket type (name/quantity/sold) để điền form. */
+  async getTicketTypeForEdit(id: string): Promise<TicketType> {
+    try {
+      return await unwrap<TicketType>(http.get(`/admin/ticket-types/${encodeURIComponent(id)}/basic`));
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Edit screen: sửa CHỈ name + quantity. Backend (content-service) validate
+   * quantity >= sold — vi phạm → 400 TICKET_TYPE_QUANTITY_BELOW_SOLD kèm
+   * sold trong body (ApiError.sold) để hiển thị số vé đã bán.
+   */
+  async updateTicketTypeBasic(id: string, body: { name: string; quantity: number }): Promise<TicketType> {
+    try {
+      return await unwrap<TicketType>(http.patch(`/admin/ticket-types/${encodeURIComponent(id)}/basic`, body));
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
 
   async createDistribution(body: {
     ticketTypeId: string;

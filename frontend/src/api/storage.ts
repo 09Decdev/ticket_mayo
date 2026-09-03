@@ -105,5 +105,10 @@ export function extractApiError(e: unknown): ApiError {
     data && typeof data === 'object' && typeof data.requested === 'number'
       ? data.requested
       : undefined;
-  return { status: ax.response?.status, code, message, remaining, requested };
+  // VÉ-EDIT: sold từ 400 TICKET_TYPE_QUANTITY_BELOW_SOLD — min quantity hint.
+  const sold =
+    data && typeof data === 'object' && typeof data.sold === 'number'
+      ? data.sold
+      : undefined;
+  return { status: ax.response?.status, code, message, remaining, requested, sold };
 }

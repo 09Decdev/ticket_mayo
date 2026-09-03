@@ -20,3 +20,17 @@ export class CreateTicketTypeDto {
   @IsString()
   codePrefix?: string;
 }
+
+/**
+ * Edit screen admin (frontend /admin/ticket-types/:id/edit) — CHỈ cho sửa
+ * name + quantity. Ràng buộc quantity >= sold được validate lại ở
+ * content-service (service layer, không tin client) — đây chỉ là DTO shape.
+ */
+export class UpdateTicketTypeBasicDto {
+  @IsString()
+  name!: string;
+
+  @IsInt()
+  @Min(0)
+  quantity!: number;
+}

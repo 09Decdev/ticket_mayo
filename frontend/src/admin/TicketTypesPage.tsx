@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ticketClient } from '../api/ticket.client';
 import type { Event, TicketType } from '../api/types';
 import { Button } from '../components/Button';
@@ -142,6 +143,7 @@ export function TicketTypesPage() {
                   <th>Đã phát</th>
                   <th>Còn lại</th>
                   <th>Tiền tố</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -153,6 +155,11 @@ export function TicketTypesPage() {
                     <td>{t.sold ?? '—'}</td>
                     <td>{t.remaining ?? t.quota}</td>
                     <td className="mono">{t.codePrefix || '—'}</td>
+                    <td>
+                      <Link className="btn btn-link" to={`/admin/ticket-types/${t.id}/edit`}>
+                        Sửa
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>

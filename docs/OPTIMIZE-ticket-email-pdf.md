@@ -194,3 +194,36 @@ Code path hiện trạng (đã đọc trực tiếp):
 - Node.js stream backpressure — https://nodejs.org/download/release/v22.13.0/docs/api/stream.html (search 2026-08-29)
 
 **Không đưa vào (chưa kiểm chứng)**: số "Gmail free ~500 tin/ngày"; số "SMTP relay Gmail 10.000 tin/ngày" (chỉ xuất hiện ở nguồn thứ cấp zhihu/CSDN); "SES default 14 tin/s + 50k/ngày" (không có trong trang AWS chính thức fetch được).
+
+---
+
+## 11. P7 (IMPLEMENTED 2026-08-29) — resize + nén ảnh event trước khi nhúng email
+
+**Vấn đề (user report)**: ảnh trong email nặng mà không rõ nét; nghi ngờ base64.
+
+**Chẩn đoán đúng gốc**:
+- KHÔNG phải data-URI base64 trong HTML — là **inline attachment CID** (`src="cid:event-banner@ticket"`, chuẩn MIME). NodeMailer base64-encode mọi binary attachment vì SMTP chỉ truyền text (+33% byte) — nhưng đó là transfer-encoding bắt buộc của chuẩn, không phải thứ cần "sửa".
+- Nặng: `fetchEventImage` nhúng **raw nguyên bản** từ presigned URL (cap cũ 3MB), không resize/nén; template hiển thị chỉ 600px.
+- Không nét: ảnh gốc nhỏ bị upscale lên 600px (retina cần 1200px). **Resize KHÔNG làm nét hơn ảnh gốc** — chỉ chặn downscale + giảm nặng; ảnh gốc nhỏ thì phải đổi ảnh nguồn.
+- PDF **không** nhúng raw: `ticket-pdf.service.ts:126` đã `sharp(data.backgroundBuffer)` → PDF không bị ảnh nặng.
+
+**Giải pháp (chỉ ticket-mayo)**: `optimizeEventImage` chạy ngay trong `fetchEventImage` (mail-dispatcher.service.ts):
+- `sharp().rotate()` (EXIF) → resize `width ≤ 1200` `withoutEnlargement` → flatten nền trắng (PNG alpha) → JPEG q80.
+- Ảnh đã JPEG ≤ 256KB → nhúng nguyên bản (không phí CPU resize).
+- Cache per-URL vốn có → toàn bộ batch cùng event chỉ optimize **1 lần**.
+- Fail-soft: optimize lỗi / nén ra to hơn → giữ nguyên bản (KHÔNG fail gửi).
+
+**Đo (jest, cùng workload, 2026-08-29, Node v22)**: 1 ảnh production-like 1664KB (2000×1250 JPEG q82 pixel nhiễu), N=100 vé cùng event.
+
+| Metric | Trước (raw) | Sau (P7) | Delta |
+|---|---|---|---|
+| Banner/email | 1,664 KB | 409 KB | **−75.4%** |
+| Tổng attachments+html N=100 | 167.4 MB | 41.9 MB | **−75.0% (−122.5 MB, ~1.2 MB/vé)** |
+| dispatchBatch N=100 (không gồm QR gen) | — | **51 ms** (0.51 ms/vé) | optimize ảnh không phải bottleneck |
+
+**Lưu ý đo trung thực**:
+- `QRCode.toBuffer` trong jest-worker chậm bất thường (490 ms/cái so với 15.9 ms/QR đo trên node thật baseline) — **artifact môi trường jest, không thuộc P7** (P7 không đụng QR); wall 49 s với QR thật là hệ quả của nó, không dùng làm số bài toán.
+- Ảnh thật (ảnh chụp, ít nhiễu hơn) ở 1200px q80 thường ~100-200KB → kích thước thực tế còn nhỏ hơn con số 409KB (nhiễu random nén rất kém).
+- Boundary: ảnh JPEG nhỏ ≤256KB giữ nguyên; mọi format khác (PNG/WebP, dù nhỏ) đều re-encode → PNG. Lần sau nếu muốn tối ưu thêm: (a) nới `EVENT_IMAGE_OPTIMIZE_IF_BIGGER_THAN_BYTES`; (b) giảm hiển thị template xuống; (c) kiểm tra lại proxy presigned URL (debug ảnh mặc định — `fetchPresignedUrls` chưa xác định được tầng fail).
+
+**Tests**: +3 unit test P7 (resize/JPEG, passthrough ảnh nhỏ, PNG alpha→flatten). Suite: **120/120 PASS**, `tsc --noEmit` sạch. Files: src/modules/mail-dispatcher/mail-dispatcher.service.ts (constants + `optimizeEventImage`), mail-dispatcher.service.spec.ts.

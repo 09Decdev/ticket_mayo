@@ -1,6 +1,7 @@
 import { env } from '../../config/env';
 import { MailDispatcherService } from './mail-dispatcher.service';
 import { ClaimMailPayload } from './mail.adapter';
+import sharp from 'sharp';
 
 const DEFAULT_BANNER = 'https://placehold.co/600x313/1e1b2e/8b5cf6.png?text=MAYogu+Event';
 
@@ -225,5 +226,103 @@ describe('MailDispatcherService — QR static signed token (content API)', () =>
 
     expect(tokenMock).not.toHaveBeenCalled();
     expect(qrMock).toHaveBeenCalledWith('http://localhost:5174/c/tok-1');
+  });
+});
+
+// ─── P7: resize + nén ảnh event trước khi nhúng CID ───
+describe('MailDispatcherService — P7 optimizeEventImage', () => {
+  let service: MailDispatcherService;
+
+  beforeEach(() => {
+    service = new MailDispatcherService(
+      { send: jest.fn() } as never,
+      { getTicketQrTokens: jest.fn() } as never,
+    );
+  });
+
+  it('ảnh to → resize ≤1200px, re-encode JPEG, nhẹ hơn rõ rệt', async () => {
+    // Ảnh production-like: ảnh thật có nhiễu (nén kém như ảnh chụp/upload thật)
+    const w = 2000;
+    const h = 1250;
+    const rawPixels = Buffer.alloc(w * h * 3);
+    for (let i = 0; i < rawPixels.length; i++) rawPixels[i] = (Math.random() * 256) | 0;
+    const raw = await sharp(rawPixels, { raw: { width: w, height: h, channels: 3 } })
+      .jpeg({ quality: 95 })
+      .toBuffer();
+
+    const out = await (service as unknown as {
+      optimizeEventImage: (b: Buffer, m: string) => Promise<{ mime: string; buf: Buffer }>;
+    }).optimizeEventImage(raw, 'image/jpeg');
+
+    expect(out.mime).toBe('image/jpeg');
+    const meta = await sharp(out.buf).metadata();
+    expect(meta.width).toBeLessThanOrEqual(1200);
+    expect(out.buf.length).toBeLessThan(raw.length);
+    expect(out.buf.length / raw.length).toBeLessThan(0.5);
+  });
+
+  it('ảnh đã là JPEG nhẹ → giữ nguyên bản, không phí CPU resize', async () => {
+    const raw = await sharp({
+      create: { width: 640, height: 400, channels: 3, background: { r: 200, g: 200, b: 220 } },
+    })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    const out = await (service as unknown as {
+      optimizeEventImage: (b: Buffer, m: string) => Promise<{ mime: string; buf: Buffer }>;
+    }).optimizeEventImage(raw, 'image/jpeg');
+
+    expect(out).toEqual({ mime: 'image/jpeg', buf: raw }); // cùng reference — không xử lý
+  });
+
+  it('PNG có alpha (poster bo góc trong suốt) → GIỮ transparency, không flatten trắng', async () => {
+    // Regression chống viền trắng: flatten→JPEG nung trắng vào vùng alpha →
+    // email hiện viền trắng quanh banner. Ảnh có alpha phải ra PNG alpha.
+    const w = 400;
+    const h = 300;
+    const px = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const border = x < 3 || y < 3 || x >= w - 3 || y >= h - 3; // fringe trong suốt
+        px[i] = 40; px[i + 1] = 60; px[i + 2] = 120; px[i + 3] = border ? 0 : 255;
+      }
+    }
+    const raw = await sharp(px, { raw: { width: w, height: h, channels: 4 } })
+      .png()
+      .toBuffer();
+
+    const out = await (service as unknown as {
+      optimizeEventImage: (b: Buffer, m: string) => Promise<{ mime: string; buf: Buffer }>;
+    }).optimizeEventImage(raw, 'image/png');
+
+    expect(out.mime).toBe('image/png');
+    const meta = await sharp(out.buf).metadata();
+    expect(meta.hasAlpha).toBe(true);
+    const { data } = await sharp(out.buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    expect(data[3]).toBe(0); // góc (0,0) vẫn trong suốt — không bị nung trắng
+  });
+
+  it('JPEG không alpha → vẫn nén qua flatten+JPEG như cũ', async () => {
+    const w = 1200;
+    const h = 600;
+    const rawPixels = Buffer.alloc(w * h * 3);
+    for (let i = 0; i < w * h; i++) {
+      rawPixels[i * 3] = (Math.random() * 256) | 0;
+      rawPixels[i * 3 + 1] = (Math.random() * 256) | 0;
+      rawPixels[i * 3 + 2] = (Math.random() * 256) | 0;
+    }
+    const raw = await sharp(rawPixels, { raw: { width: w, height: h, channels: 3 } })
+      .png()
+      .toBuffer();
+
+    const out = await (service as unknown as {
+      optimizeEventImage: (b: Buffer, m: string) => Promise<{ mime: string; buf: Buffer }>;
+    }).optimizeEventImage(raw, 'image/png');
+
+    expect(out.mime).toBe('image/jpeg');
+    const meta = await sharp(out.buf).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.hasAlpha).toBe(false);
   });
 });

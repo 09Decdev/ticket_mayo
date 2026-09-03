@@ -26,6 +26,15 @@ const CID_DOWNLOAD_ICON = 'download-icon@ticket';
 const MAX_EVENT_IMAGE_BYTES = 3 * 1024 * 1024;
 const EVENT_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 
+/**
+ * P7: ảnh event nhúng email chỉ hiển thị 600px (template) → gửi tối đa 1200px
+ * (retina ×2) JPEG q80 thay vì nhúng raw — email nhẹ hơn rõ rệt. Ảnh đã là
+ * JPEG nhẹ (≤256KB) thì nhúng nguyên bản, khỏi phí CPU resize.
+ */
+const EVENT_IMAGE_EMAIL_MAX_WIDTH = 1200;
+const EVENT_IMAGE_EMAIL_JPEG_QUALITY = 80;
+const EVENT_IMAGE_OPTIMIZE_IF_BIGGER_THAN_BYTES = 256 * 1024;
+
 /** Số payload xử lý đồng thời trong 1 đợt (P2 — tránh dồn CPU/sharp + SMTP cùng lúc). */
 const MAIL_DISPATCH_CONCURRENCY = 4;
 
@@ -335,15 +344,50 @@ export class MailDispatcherService {
         cache.set(url, null);
         return null;
       }
-      const entry = { mime, buf };
-      cache.set(url, entry);
-      return { ...entry };
+      const optimized = await this.optimizeEventImage(buf, mime);
+      cache.set(url, optimized);
+      return { ...optimized };
     } catch (err) {
       this.logger.warn(
         `[MAIL-EVENT-IMG] fetch lỗi: ${(err as Error).message} — fallback banner mặc định`,
       );
       cache.set(url, null);
       return null;
+    }
+  }
+
+  /**
+   * P7: resize + nén ảnh event trước khi nhúng CID. Có cache per-URL trong cả
+   * batch (fetchEventImage) nên cùng event chỉ chạy 1 lần. KHÔNG upscale ảnh nhỏ
+   * (không thể nét hơn ảnh gốc); nếu nén ra to hơn gốc → giữ nguyên bản.
+   */
+  private async optimizeEventImage(
+    buf: Buffer,
+    mime: string,
+  ): Promise<{ mime: string; buf: Buffer }> {
+    if (mime === 'image/jpeg' && buf.length <= EVENT_IMAGE_OPTIMIZE_IF_BIGGER_THAN_BYTES) {
+      return { mime, buf };
+    }
+    try {
+      const base = sharp(buf).rotate();
+      const meta = await base.metadata();
+      // Ảnh có alpha (vd poster bo góc trong suốt): flatten→JPEG sẽ nung nền
+      // trắng vào vùng trong suốt → email hiện viền trắng. Giữ PNG (palette nén).
+      const resized = base.resize({
+        width: EVENT_IMAGE_EMAIL_MAX_WIDTH,
+        withoutEnlargement: true,
+      });
+      const out = meta.hasAlpha
+        ? await resized.png({ palette: true, quality: EVENT_IMAGE_EMAIL_JPEG_QUALITY }).toBuffer()
+        : await resized
+            .flatten({ background: '#ffffff' })
+            .jpeg({ quality: EVENT_IMAGE_EMAIL_JPEG_QUALITY })
+            .toBuffer();
+      if (out.length >= buf.length) return { mime, buf };
+      return { mime: meta.hasAlpha ? 'image/png' : 'image/jpeg', buf: out };
+    } catch (err) {
+      this.logger.warn(`[MAIL-EVENT-IMG] optimize lỗi: ${(err as Error).message} — dùng ảnh gốc`);
+      return { mime, buf };
     }
   }
 
