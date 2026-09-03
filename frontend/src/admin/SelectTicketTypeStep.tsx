@@ -25,6 +25,10 @@ export function SelectTicketTypeStep() {
   const eventId = draft.eventId || '';
   const ticketTypeId = draft.ticketTypeId || '';
   const quantity = draft.quantity;
+  // VÉ-EMAIL: chỉ hiện/cho chọn loại vé BẬT phát qua email (cờ true).
+  // content-service cũng chặn ở issue/mint (server-side) — đây là lọc client
+  // để admin không chọn nhầm loại vé thường.
+  const distTypes = types.filter((t) => t.emailDistribution);
 
   useEffect(() => {
     if (!draft.eventId) {
@@ -52,7 +56,7 @@ export function SelectTicketTypeStep() {
   }, [eventId]);
 
   function pickType(id: string) {
-    const t = types.find((x) => x.id === id);
+    const t = distTypes.find((x) => x.id === id);
     setDraft({ ticketTypeId: id, ticketTypeName: t?.name, ticketTypeRemaining: t?.remaining });
   }
 
@@ -117,7 +121,7 @@ export function SelectTicketTypeStep() {
                   required
                 >
                   <option value="">— Chọn loại vé —</option>
-                  {types.map((t) => (
+                  {distTypes.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
                       {t.price != null ? ` · ${t.price}` : ''}
@@ -125,6 +129,12 @@ export function SelectTicketTypeStep() {
                     </option>
                   ))}
                 </select>
+                {!loading && distTypes.length === 0 && (
+                  <div className="hint">
+                    Chưa có loại vé nào bật <strong>Phát vé qua email</strong> cho sự kiện này —
+                    tạo/bật ở màn <strong>Loại vé</strong> trước khi phát.
+                  </div>
+                )}
                 {ticketTypeId && (
                   <div className="hint">
                     {draft.ticketTypeRemaining != null

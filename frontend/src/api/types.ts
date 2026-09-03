@@ -36,6 +36,8 @@ export interface Event {
   venue?: string | null;
   startAt?: string | null;
   endAt?: string | null;
+  /** EVENT-EDIT: sức chứa hiện tại (content maxParticipants) — min khi sửa. */
+  maxParticipants?: number | null;
 }
 
 export interface TicketType {
@@ -50,6 +52,8 @@ export interface TicketType {
   sold?: number;
   remaining?: number;
   maxTicketsPerUser?: number | null;
+  /** VÉ-EMAIL: true = chỉ phát qua email — chỉ hiện ở bước phát vé. */
+  emailDistribution?: boolean;
 }
 
 export interface TicketView {
@@ -170,4 +174,7 @@ export interface ApiError {
   requested?: number;
   /** VÉ-EDIT: 400 TICKET_TYPE_QUANTITY_BELOW_SOLD — số vé đã bán (min quantity). */
   sold?: number;
+  /** EVENT-EDIT: 400 EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED — số người đã
+   *  đăng ký (min sức chứa khi sửa event). */
+  registeredCount?: number;
 }

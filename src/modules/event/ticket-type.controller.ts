@@ -1,4 +1,16 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { EventService } from './event.service';
@@ -45,5 +57,16 @@ export class TicketTypeController {
   })
   updateBasic(@Param('id') id: string, @Body() dto: UpdateTicketTypeBasicDto) {
     return this.eventService.updateTicketTypeBasic(id, dto);
+  }
+
+  // DELETE-INTERNAL: xóa loại vé — content hard-delete + AuditLog, chỉ khi
+  // sold = 0. sold > 0 → 400 TICKET_TYPE_HAS_SOLD_TICKETS kèm sold.
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete a ticket type — chỉ khi chưa có vé được cấp (sold = 0)',
+  })
+  remove(@Param('id') id: string) {
+    return this.eventService.deleteTicketType(id);
   }
 }

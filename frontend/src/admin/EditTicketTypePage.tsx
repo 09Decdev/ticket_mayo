@@ -160,7 +160,15 @@ export function EditTicketTypePage() {
               <Button
                 variant="secondary"
                 type="button"
-                onClick={() => navigate('/admin/ticket-types')}
+                onClick={() =>
+                  // PERSIST-EVENT: về danh sách kèm đúng sự kiện của loại vé này
+                  // để không mất ngữ cảnh (màn danh sách đọc ?eventId= từ URL).
+                  navigate(
+                    initial.eventId
+                      ? `/admin/ticket-types?eventId=${encodeURIComponent(initial.eventId)}`
+                      : '/admin/ticket-types',
+                  )
+                }
               >
                 Quay lại
               </Button>

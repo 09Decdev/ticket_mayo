@@ -486,6 +486,14 @@ h3 { font-size: 15px; }
   background: var(--primary-soft);
   box-shadow: none;
 }
+/* DELETE-INTERNAL: nút Xóa bị chặn vì sold > 0 — nhìn disabled + tooltip. */
+.btn-link.is-disabled {
+  background: transparent;
+  color: var(--muted);
+}
+.btn-link.is-disabled:hover {
+  background: transparent;
+}
 
 /* ============================================================
    Utilities: row, muted, mono
@@ -1224,3 +1232,102 @@ details > summary {
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .table { min-width: 420px; }
 }
+
+/* ============================================================
+   Page context bar + structured form card (admin)
+   Thêm lớp mới — giữ toàn bộ class cũ (backward-compatible).
+   ============================================================ */
+
+/* Bối cảnh sự kiện — thay cho card "Chọn sự kiện" rời rạc. */
+.context-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+.context-bar .form-field {
+  margin-bottom: 0;
+  flex: 1 1 240px;
+  min-width: 220px;
+  max-width: 420px;
+}
+.context-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding-bottom: 2px;
+}
+.context-meta .context-name {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+@media (min-width: 561px) {
+  .context-meta { align-items: flex-end; text-align: right; }
+}
+
+/* Lưới 2 cột responsive — tự collapse về 1 cột trên mobile. */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+}
+@media (max-width: 560px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+
+/* Tùy chọn dạng hàng có khung (checkbox + label trong cột). */
+.check-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.check-row input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.check-row .check-text { min-width: 0; }
+.check-row .check-label {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  color: #334155;
+  margin-bottom: 2px;
+  cursor: pointer;
+}
+.check-row .hint { margin-top: 0; }
+
+/* Hàng hành động cuối form — nút chính góc phải. */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--surface-2);
+}
+
+/* Đầu card có tiêu đề + mô tả phụ. */
+.card-head { margin-bottom: 14px; }
+.card-head h3 { margin: 0 0 2px; border: none; padding-bottom: 0; }
+.card-head .card-sub { color: var(--muted); font-size: 12.5px; margin: 0; }

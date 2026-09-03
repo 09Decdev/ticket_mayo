@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ticketClient } from '../api/ticket.client';
 import type { Event } from '../api/types';
 import { Button } from '../components/Button';
@@ -110,6 +111,7 @@ export function EventsPage() {
                   <th>Địa điểm</th>
                   <th>Bắt đầu</th>
                   <th>Kết thúc</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -119,6 +121,10 @@ export function EventsPage() {
                     <td>{ev.venue || '—'}</td>
                     <td>{formatDateTime(ev.startAt)}</td>
                     <td>{formatDateTime(ev.endAt)}</td>
+                    <td>
+                      {/* EVENT-EDIT: vào màn sửa event (theo pattern Sửa loại vé). */}
+                      <Link to={`/admin/events/${encodeURIComponent(ev.id)}/edit`}>Sửa</Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>

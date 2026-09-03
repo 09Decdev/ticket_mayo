@@ -19,6 +19,8 @@ type ContentEvent = {
   status: string;
   serialPrefix?: string | null;
   eventImageUrl?: string | null;
+  /** EVENT-EDIT: sức chứa hiện tại của event (content maxParticipants). */
+  maxParticipants?: number | null;
 };
 type ContentTicketType = {
   id: string;
@@ -31,6 +33,8 @@ type ContentTicketType = {
   remaining: number;
   maxTicketsPerUser: number | null;
   note?: string | null;
+  /** VÉ-EMAIL: true = chỉ phát qua email, được chọn ở bước phát vé. */
+  emailDistribution?: boolean;
   event?: {
     id: string;
     title: string;
@@ -69,13 +73,29 @@ export class EventService {
   }
 
   async updateEvent(id: string, dto: UpdateEventDto) {
-    const body: Record<string, string> = {};
+    const body: Record<string, string | number> = {};
     if (dto.name !== undefined) body.title = dto.name;
     if (dto.venue !== undefined) body.address = dto.venue;
     if (dto.startAt !== undefined) body.startTime = dto.startAt;
     if (dto.endAt !== undefined) body.endTime = dto.endAt;
+    // EVENT-EDIT: sức chứa — content validate >= số đã đăng ký, thấp hơn →
+    // 400 EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED kèm registeredCount
+    // (HttpException pass-through — frontend hiển thị min sức chứa).
+    if (dto.maxParticipants !== undefined) body.maxParticipants = dto.maxParticipants;
     const updated = await this.content.updateEvent(id, body);
     return this.mapEvent(updated);
+  }
+
+  /**
+   * Dữ liệu cho edit screen admin (EVENT-EDIT): các field cần để sửa
+   * name/venue/startAt/endAt/maxParticipants. maxParticipants hiện tại để
+   * điền form; số đã đăng ký (registeredCount) lấy từ lỗi 400 của content
+   * khi admin nhập thấp hơn (server re-read, không tin client).
+   */
+  async getEventForEdit(id: string) {
+    const e = await this.content.getEvent(id);
+    if (!e) throw new NotFoundException(`Event ${id} not found.`);
+    return this.mapEvent(e);
   }
 
   // ─── Ticket types ───
@@ -99,6 +119,8 @@ export class EventService {
       price: dto.price ?? 0,
       quantity: dto.quota,
       typeCode: dto.codePrefix ?? undefined,
+      // VÉ-EMAIL: admin chọn lúc tạo (default false) — truyền thẳng content.
+      emailDistribution: dto.emailDistribution ?? false,
     });
     return this.mapTicketType(created);
   }
@@ -126,6 +148,17 @@ export class EventService {
       quantity: dto.quantity,
     });
     return this.mapTicketType(updated);
+  }
+
+  /**
+   * DELETE-INTERNAL: xóa loại vé qua DELETE .../ticket-types/:id của content.
+   * Content (nguồn sự thật) hard-delete trong tx + AuditLog và validate
+   * sold = 0 ở service layer (re-read DB, không tin client) — đã có vé
+   * được cấp → 400 TICKET_TYPE_HAS_SOLD_TICKETS kèm sold (HttpException
+   * pass-through để frontend hiển thị lý do chặn).
+   */
+  async deleteTicketType(id: string) {
+    return this.content.deleteTicketType(id);
   }
 
   /** Resolve một ticket type (kèm event + số lượng) — dùng cho snapshot khi phát vé. */
@@ -187,6 +220,8 @@ export class EventService {
       startAt: e.startTime,
       endAt: e.endTime,
       imageUrl: e.eventImageUrl ?? null,
+      // EVENT-EDIT: lộ sức chứa hiện tại cho edit screen.
+      maxParticipants: e.maxParticipants ?? null,
     };
   }
 
@@ -202,6 +237,8 @@ export class EventService {
       remaining: t.remaining,
       maxTicketsPerUser: t.maxTicketsPerUser ?? null,
       codePrefix: t.typeCode ?? null,
+      // VÉ-EMAIL: lộ cho UI lọc ở bước phát vé.
+      emailDistribution: t.emailDistribution ?? false,
     };
   }
 }

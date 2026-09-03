@@ -4,6 +4,7 @@ import { AdminLayout } from './components/Layout';
 import { DistributionDraftProvider } from './admin/DistributionDraftContext';
 import { AdminLoginPage } from './admin/AdminLoginPage';
 import { EventsPage } from './admin/EventsPage';
+import { EditEventPage } from './admin/EditEventPage';
 import { TicketTypesPage } from './admin/TicketTypesPage';
 import { EditTicketTypePage } from './admin/EditTicketTypePage';
 import { ImportEmailListPage } from './admin/ImportEmailListPage';
@@ -55,6 +56,8 @@ export default function App() {
           <Route path="/admin/distribute/type" element={<SelectTicketTypeStep />} />
           <Route path="/admin/distribute/confirm" element={<ConfirmDistributionStep />} />
           <Route path="/admin/events" element={<EventsPage />} />
+          {/* EVENT-EDIT: sửa sự kiện (name/venue/thời gian/maxParticipants). */}
+          <Route path="/admin/events/:id/edit" element={<EditEventPage />} />
           <Route path="/admin/ticket-types" element={<TicketTypesPage />} />
           <Route path="/admin/ticket-types/:id/edit" element={<EditTicketTypePage />} />
           <Route path="/admin/distributions" element={<DistributionsListPage />} />

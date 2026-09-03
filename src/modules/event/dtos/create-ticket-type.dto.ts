@@ -1,4 +1,4 @@
-import { IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateTicketTypeDto {
   @IsString()
@@ -19,6 +19,11 @@ export class CreateTicketTypeDto {
   @IsOptional()
   @IsString()
   codePrefix?: string;
+
+  /** VÉ-EMAIL: true = được phát vé qua email. Default false khi không gửi. */
+  @IsOptional()
+  @IsBoolean()
+  emailDistribution?: boolean;
 }
 
 /**

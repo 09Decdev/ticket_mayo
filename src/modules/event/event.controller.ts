@@ -19,6 +19,16 @@ export class EventController {
     return this.eventService.listEvents(search);
   }
 
+  /**
+   * EVENT-EDIT: dữ liệu cho edit screen — các field sửa được + giá trị hiện tại
+   * (name/venue/startAt/endAt/maxParticipants).
+   */
+  @Get(':id')
+  @ApiOperation({ summary: 'Get one event for the edit screen' })
+  async getEventForEdit(@Param('id') id: string) {
+    return this.eventService.getEventForEdit(id);
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create an event' })

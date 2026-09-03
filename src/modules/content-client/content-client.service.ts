@@ -52,6 +52,16 @@ const PASSABLE_ERROR_CODES = new Set([
   'DUPLICATE_PRETICKET_ID',
   // Edit ticket: 400 quantity < sold — kèm sold để UI hiển thị min quantity.
   'TICKET_TYPE_QUANTITY_BELOW_SOLD',
+  // VÉ-EMAIL: 400 phát vé loại vé không bật emailDistribution — hiển thị
+  // lỗi server cho admin (UI đã lọc, đây là tầng phòng thủ 2).
+  'TICKET_EMAIL_DISTRIBUTION_NOT_ALLOWED',
+  // DELETE-INTERNAL: 400 xóa loại vé đã có vé được cấp — kèm sold cho UI.
+  'TICKET_TYPE_HAS_SOLD_TICKETS',
+  // EVENT-EDIT: 400 maxParticipants < số người đã đăng ký — kèm
+  // registeredCount để UI hiển thị min sức chứa.
+  'EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED',
+  // EVENT-EDIT: 400 endTime <= startTime khi sửa event.
+  'EVENT_TIME_INVALID',
 ]);
 
 /** Số recipient tối đa / mint call (chunk client-side, ≤ max 1000 của content DTO). */
@@ -106,6 +116,7 @@ export class ContentClientService {
         let remaining: number | undefined;
         let requested: number | undefined;
         let sold: number | undefined;
+        let registeredCount: number | undefined;
         try {
           const body = (await res.json()) as {
             message?: string;
@@ -129,6 +140,10 @@ export class ContentClientService {
           if (typeof body?.sold === 'number') {
             sold = body.sold;
           }
+          // EVENT-EDIT: registeredCount từ 400 EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED.
+          if (typeof body?.registeredCount === 'number') {
+            registeredCount = body.registeredCount;
+          }
         } catch {
           /* non-JSON error body */
         }
@@ -145,6 +160,7 @@ export class ContentClientService {
               ...(remaining !== undefined ? { remaining } : {}),
               ...(requested !== undefined ? { requested } : {}),
               ...(sold !== undefined ? { sold } : {}),
+              ...(registeredCount !== undefined ? { registeredCount } : {}),
             },
             res.status,
           );
@@ -185,6 +201,15 @@ export class ContentClientService {
     if (params?.status) qp.set('status', params.status);
     const qs = qp.toString();
     return this.request<any[]>('/internal/distribution/events' + (qs ? `?${qs}` : ''));
+  }
+  /**
+   * EVENT-EDIT: lấy 1 event theo id cho edit screen (name/venue/thời gian/
+   * maxParticipants). 404 nếu không tồn tại.
+   */
+  getEvent(id: string) {
+    return this.request<any>(
+      `/internal/distribution/events/${encodeURIComponent(id)}`,
+    );
   }
   createEvent(body: any) {
     return this.request<any>('/internal/distribution/events', {
@@ -234,6 +259,17 @@ export class ContentClientService {
         method: 'PATCH',
         body: JSON.stringify(body),
       },
+    );
+  }
+  /**
+   * DELETE-INTERNAL: xóa loại vé (hard-delete + AuditLog ở content).
+   * Content validate sold = 0 (service layer) — sold > 0 → 400
+   * TICKET_TYPE_HAS_SOLD_TICKETS kèm sold trong body (pass-through Δ7).
+   */
+  deleteTicketType(id: string) {
+    return this.request<{ deleted: boolean; id: string }>(
+      `/internal/distribution/ticket-types/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     );
   }
 

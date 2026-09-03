@@ -115,7 +115,25 @@ export const ticketClient = {
       throw toApiError(e);
     }
   },
-  async updateEvent(id: string, body: Partial<{ name: string; venue?: string; startAt?: string; endAt?: string }>): Promise<Event> {
+  /** Edit screen: lấy 1 event (name/venue/thời gian/maxParticipants). */
+  async getEventForEdit(id: string): Promise<Event> {
+    try {
+      return await unwrap<Event>(http.get(`/admin/events/${encodeURIComponent(id)}`));
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Edit screen: sửa event (name/venue/thời gian/maxParticipants). Backend
+   * (content-service) validate maxParticipants >= số người đã đăng ký —
+   * vi phạm → 400 EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED kèm registeredCount
+   * trong body (ApiError.registeredCount); endTime <= startTime → 400
+   * EVENT_TIME_INVALID.
+   */
+  async updateEvent(
+    id: string,
+    body: Partial<{ name: string; venue?: string; startAt?: string; endAt?: string; maxParticipants?: number }>,
+  ): Promise<Event> {
     try {
       return await unwrap<Event>(http.patch(`/admin/events/${encodeURIComponent(id)}`, body));
     } catch (e) {
@@ -131,7 +149,14 @@ export const ticketClient = {
       throw toApiError(e);
     }
   },
-  async createTicketType(body: { eventId: string; name: string; price?: number; quota: number; codePrefix?: string }): Promise<TicketType> {
+  async createTicketType(body: {
+    eventId: string;
+    name: string;
+    price?: number;
+    quota: number;
+    codePrefix?: string;
+    emailDistribution?: boolean;
+  }): Promise<TicketType> {
     try {
       return await unwrap<TicketType>(http.post('/admin/ticket-types', body));
     } catch (e) {
@@ -154,6 +179,20 @@ export const ticketClient = {
   async updateTicketTypeBasic(id: string, body: { name: string; quantity: number }): Promise<TicketType> {
     try {
       return await unwrap<TicketType>(http.patch(`/admin/ticket-types/${encodeURIComponent(id)}/basic`, body));
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Xóa loại vé. Backend (content-service) hard-delete + AuditLog, chỉ khi
+   * sold = 0 (re-read DB) — đã có vé được cấp → 400
+   * TICKET_TYPE_HAS_SOLD_TICKETS kèm sold trong body (ApiError.sold).
+   */
+  async deleteTicketType(id: string): Promise<{ deleted: boolean; id: string }> {
+    try {
+      return await unwrap<{ deleted: boolean; id: string }>(
+        http.delete(`/admin/ticket-types/${encodeURIComponent(id)}`),
+      );
     } catch (e) {
       throw toApiError(e);
     }
