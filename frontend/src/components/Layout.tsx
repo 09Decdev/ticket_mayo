@@ -28,6 +28,7 @@ const MANAGE_LINKS: SidebarLink[] = [
   { to: '/admin/distributions', label: 'Lịch phát vé', icon: <IconList /> },
   { to: '/admin/events', label: 'Sự kiện', icon: <IconCalendar /> },
   { to: '/admin/ticket-types', label: 'Loại vé', icon: <IconTag /> },
+  { to: '/admin/merge-ticket-types', label: 'Gộp loại vé', icon: <IconTicket /> },
 ];
 
 const OPERATE_LINKS: SidebarLink[] = [

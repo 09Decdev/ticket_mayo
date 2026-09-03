@@ -7,6 +7,7 @@ import { EventsPage } from './admin/EventsPage';
 import { EditEventPage } from './admin/EditEventPage';
 import { TicketTypesPage } from './admin/TicketTypesPage';
 import { EditTicketTypePage } from './admin/EditTicketTypePage';
+import { MergeTicketTypesPage } from './admin/MergeTicketTypesPage';
 import { ImportEmailListPage } from './admin/ImportEmailListPage';
 import { SelectEventStep } from './admin/SelectEventStep';
 import { SelectTicketTypeStep } from './admin/SelectTicketTypeStep';
@@ -60,6 +61,8 @@ export default function App() {
           <Route path="/admin/events/:id/edit" element={<EditEventPage />} />
           <Route path="/admin/ticket-types" element={<TicketTypesPage />} />
           <Route path="/admin/ticket-types/:id/edit" element={<EditTicketTypePage />} />
+          {/* TICKET-MERGE: "Gộp loại vé" — dry-run + apply MERGE + rollback ROLLBACK. */}
+          <Route path="/admin/merge-ticket-types" element={<MergeTicketTypesPage />} />
           <Route path="/admin/distributions" element={<DistributionsListPage />} />
           <Route path="/admin/distributions/:jobId" element={<DistributionDetailPage />} />
           <Route path="/admin/stats" element={<AnalyticsDashboardPage />} />

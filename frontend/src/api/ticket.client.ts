@@ -9,6 +9,10 @@ import type {
   DistributionJob,
   DistributionStatusResp,
   Event,
+  MergeApplyResult,
+  MergePlanReport,
+  MergeRollbackResult,
+  MergeTicketOverrides,
   OverviewStats,
   TicketType,
   TicketView,
@@ -299,6 +303,65 @@ export const ticketClient = {
       const data: any = r?.data;
       if (data?.needsAuth) return { ok: false, needsAuth: true };
       return { ok: false, status: r?.status, code: data?.code, message: data?.message || data?.error };
+    }
+  },
+
+  // ─── TICKET-MERGE ("Gộp loại vé") ───
+  /**
+   * GET plan (dry-run): { content: <merge-plan report>, local: <repoint report> }.
+   * Truyền survivorId/loserIds → có mergeTarget (blockers/warnings/projection).
+   */
+  async mergePlan(params: {
+    eventId: string;
+    survivorId?: string;
+    loserIds?: string[];
+  }): Promise<MergePlanReport> {
+    try {
+      return await unwrap<MergePlanReport>(
+        http.get(
+          `/admin/ticket-merge/plan${qs({
+            eventId: params.eventId,
+            survivorId: params.survivorId,
+            loserIds: params.loserIds?.length ? params.loserIds.join(',') : undefined,
+          })}`,
+        ),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * POST merge (confirm="MERGE"). Timeout 130s — content transaction lớn có
+   * thể chạy tới 120s; axios default 30s sẽ abort sớm hơn backend.
+   */
+  async mergeTicketTypes(body: {
+    eventId: string;
+    survivorId: string;
+    loserIds: string[];
+    overrides?: MergeTicketOverrides;
+    includeTerminal?: boolean;
+    confirm: 'MERGE';
+  }): Promise<MergeApplyResult> {
+    try {
+      return await unwrap<MergeApplyResult>(
+        http.post('/admin/ticket-merge', body, { timeout: 130_000 }),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /** POST rollback (confirm="ROLLBACK") — content trước, local sau. */
+  async mergeRollback(body: {
+    contentAuditId: string;
+    repointAuditId?: string;
+    confirm: 'ROLLBACK';
+  }): Promise<MergeRollbackResult> {
+    try {
+      return await unwrap<MergeRollbackResult>(
+        http.post('/admin/ticket-merge/rollback', body, { timeout: 130_000 }),
+      );
+    } catch (e) {
+      throw toApiError(e);
     }
   },
 };

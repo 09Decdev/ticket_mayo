@@ -62,6 +62,13 @@ const PASSABLE_ERROR_CODES = new Set([
   'EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED',
   // EVENT-EDIT: 400 endTime <= startTime khi sửa event.
   'EVENT_TIME_INVALID',
+  // TICKET-TYPE-MERGE: internal merge API errors — pass-through để UI admin
+  // hiển thị đúng nguyên nhân (400 shape/quantity, 409 blockers PENDING/
+  // rollback conflict, 404 audit not found).
+  'TICKET_TYPE_MERGE_INVALID_INPUT',
+  'TICKET_TYPE_MERGE_BLOCKED',
+  'TICKET_TYPE_MERGE_ROLLBACK_CONFLICT',
+  'TICKET_TYPE_MERGE_AUDIT_NOT_FOUND',
 ]);
 
 /** Số recipient tối đa / mint call (chunk client-side, ≤ max 1000 của content DTO). */
@@ -97,9 +104,9 @@ export class ContentClientService {
 
   private readonly mintSigningKey: string;
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await globalThis.fetch(`${this.baseUrl}${path}`, {
         ...init,
@@ -117,6 +124,8 @@ export class ContentClientService {
         let requested: number | undefined;
         let sold: number | undefined;
         let registeredCount: number | undefined;
+        let blockers: unknown[] | undefined;
+        let warnings: unknown[] | undefined;
         try {
           const body = (await res.json()) as {
             message?: string;
@@ -144,6 +153,12 @@ export class ContentClientService {
           if (typeof body?.registeredCount === 'number') {
             registeredCount = body.registeredCount;
           }
+          // TICKET-TYPE-MERGE: blockers/warnings là mảng string — chỉ pass khi
+          // bizCode là merge code (whitelist bên dưới gate lại).
+          if (bizCode?.startsWith('TICKET_TYPE_MERGE')) {
+            if (Array.isArray(body?.blockers)) blockers = body.blockers as unknown[];
+            if (Array.isArray(body?.warnings)) warnings = body.warnings as unknown[];
+          }
         } catch {
           /* non-JSON error body */
         }
@@ -161,6 +176,8 @@ export class ContentClientService {
               ...(requested !== undefined ? { requested } : {}),
               ...(sold !== undefined ? { sold } : {}),
               ...(registeredCount !== undefined ? { registeredCount } : {}),
+              ...(blockers !== undefined ? { blockers } : {}),
+              ...(warnings !== undefined ? { warnings } : {}),
             },
             res.status,
           );
@@ -497,5 +514,50 @@ export class ContentClientService {
       checkedIn: number;
       byGate: { gateId: string | null; count: number }[];
     }>(`/internal/distribution/stats/events/${encodeURIComponent(eventId)}/attendance`);
+  }
+
+  // ─── TICKET-TYPE-MERGE (admin "Gộp loại vé") ───
+  /**
+   * GET merge-plan (dry-run, không ghi gì): event + per-type report (vé đã mua
+   * kèm userId người mua, reservation/seat/gift counts) + mergeTarget
+   * (blockers/warnings/projection) khi truyền survivorId+loserIds.
+   */
+  getMergePlan(params: { eventId: string; survivorId?: string; loserIds?: string[] }) {
+    const qp = new URLSearchParams({ eventId: params.eventId });
+    if (params.survivorId) qp.set('survivorId', params.survivorId);
+    if (params.loserIds?.length) qp.set('loserIds', params.loserIds.join(','));
+    return this.request<any>(`/internal/distribution/ticket-types/merge-plan?${qp.toString()}`);
+  }
+
+  /**
+   * POST merge (transaction thật ở content). Timeout 120s — content giữ
+   * advisory lock per event + re-point N vé; 15s mặc định KHÔNG đủ cho event
+   * lớn. Lỗi merge (400/409) pass-through kèm blockers[] qua whitelist.
+   */
+  mergeTicketTypes(body: {
+    eventId: string;
+    survivorId: string;
+    loserIds: string[];
+    overrides?: Record<string, unknown>;
+    actorId?: string;
+  }) {
+    this.logger.log(
+      `[MERGE] content /internal/distribution/ticket-types/merge event=${body.eventId} survivor=${body.survivorId} losers=[${body.loserIds.join(',')}]`,
+    );
+    return this.request<any>(
+      '/internal/distribution/ticket-types/merge',
+      { method: 'POST', body: JSON.stringify(body) },
+      120_000,
+    );
+  }
+
+  /** POST merge/rollback theo auditId (120s như merge). */
+  mergeRollback(body: { auditId: string; actorId?: string }) {
+    this.logger.log(`[MERGE] content rollback audit=${body.auditId}`);
+    return this.request<any>(
+      '/internal/distribution/ticket-types/merge/rollback',
+      { method: 'POST', body: JSON.stringify(body) },
+      120_000,
+    );
   }
 }

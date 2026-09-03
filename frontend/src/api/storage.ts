@@ -110,5 +110,34 @@ export function extractApiError(e: unknown): ApiError {
     data && typeof data === 'object' && typeof data.sold === 'number'
       ? data.sold
       : undefined;
-  return { status: ax.response?.status, code, message, remaining, requested, sold };
+  // TICKET-MERGE: blockers/warnings mảng string (pass-through content 409/400)
+  // + cờ local repoint đã undo (service mayo gắn vào error body).
+  const blockers =
+    data && typeof data === 'object' && Array.isArray(data.blockers)
+      ? (data.blockers as string[])
+      : undefined;
+  const warnings =
+    data && typeof data === 'object' && Array.isArray(data.warnings)
+      ? (data.warnings as string[])
+      : undefined;
+  const localRepointRolledBack =
+    data && typeof data === 'object' && typeof data.localRepointRolledBack === 'boolean'
+      ? (data.localRepointRolledBack as boolean)
+      : undefined;
+  const repointAuditId =
+    data && typeof data === 'object' && typeof data.repointAuditId === 'string'
+      ? (data.repointAuditId as string)
+      : undefined;
+  return {
+    status: ax.response?.status,
+    code,
+    message,
+    remaining,
+    requested,
+    sold,
+    blockers,
+    warnings,
+    localRepointRolledBack,
+    repointAuditId,
+  };
 }

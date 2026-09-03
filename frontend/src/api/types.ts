@@ -177,4 +177,129 @@ export interface ApiError {
   /** EVENT-EDIT: 400 EVENT_MAX_PARTICIPANTS_BELOW_REGISTERED — số người đã
    *  đăng ký (min sức chứa khi sửa event). */
   registeredCount?: number;
+  /** TICKET-MERGE: 409 TICKET_TYPE_MERGE_BLOCKED / 400 INVALID_INPUT — mảng
+   *  lý do chặn gộp (pass-through từ content-service). */
+  blockers?: string[];
+  warnings?: string[];
+  /** TICKET-MERGE apply fail 4xx: local repoint đã được tự undo chưa. */
+  localRepointRolledBack?: boolean;
+  repointAuditId?: string;
+}
+
+// ─── TICKET-MERGE: "Gộp loại vé" admin page ───
+/** Một vé đã mua trong report per-type (userId = NULL với vé email chưa claim). */
+export interface MergeTicketBuyer {
+  ticketId: string;
+  ticketCode: string;
+  userId: string | null;
+  status: TicketStatus;
+  purchasePrice: string;
+  createdAt: string;
+}
+
+/** Stat per loại vé từ content merge-plan (report dry-run). */
+export interface MergeTypeStat {
+  id: string;
+  name: string;
+  typeCode: string | null;
+  price: string;
+  quantity: number;
+  sold: number;
+  remaining: number;
+  maxTicketsPerUser: number;
+  emailDistribution: boolean;
+  tickets: {
+    total: number;
+    byStatus: Record<string, number>;
+    buyers: MergeTicketBuyer[];
+    buyersTruncated: boolean;
+  };
+  reservations: { total: number; byStatus: Record<string, number> };
+  seats: number;
+  giftCampaigns: number;
+}
+
+export interface MergeProjection {
+  quantity: number;
+  sold: number;
+  name: string;
+  price: string;
+  maxTicketsPerUser: number;
+  emailDistribution: boolean;
+}
+
+/** GET /admin/ticket-merge/plan → { content, local } */
+export interface MergePlanReport {
+  content: {
+    mode: 'plan';
+    eventId: string;
+    event: { id: string; title: string; maxParticipants: number | null };
+    types: MergeTypeStat[];
+    mergeTarget: {
+      survivorId: string | null;
+      loserIds: string[];
+      overrides: MergeTicketOverrides | null;
+      ok: boolean;
+      shapeErrors: string[];
+      blockers: string[];
+      warnings: string[];
+      projection: MergeProjection | null;
+      movedCounts: { tickets: number; reservations: number; seats: number; giftCampaigns: number };
+      maxParticipantsBefore: number | null;
+      maxParticipantsAfter: number | null;
+    } | null;
+    generatedAt: string;
+  };
+  /** Báo cáo repoint DB lokal (PreTicket/DistributionJob) — null khi chưa chọn survivor+losers. */
+  local: {
+    ok: boolean;
+    alreadyRepointed: boolean;
+    blockers: string[];
+    warnings: string[];
+    counts: {
+      live: { byStatus: Record<string, number>; total: number };
+      terminal: { total: number };
+      liveJobs: { id: string; status: string; ticketTypeName: string }[];
+      terminalJobs: number;
+    };
+  } | { error: string } | null;
+}
+
+export interface MergeTicketOverrides {
+  name?: string;
+  price?: number;
+  quantity?: number;
+  maxTicketsPerUser?: number;
+  emailDistribution?: boolean;
+}
+
+export interface MergeApplyResult {
+  status: 'merged' | 'merged-after-ambiguous-error';
+  content: {
+    auditId: string;
+    survivor: unknown;
+    mergedLosers: { id: string; name: string }[];
+    moved: { tickets: number; reservations: number; seats: number; giftCampaigns: number };
+    projection: MergeProjection;
+    event: { maxParticipantsBefore: number | null; maxParticipantsAfter: number };
+    soldReconcile: { counter: number; dbCount: number; drift: boolean };
+    warnings: string[];
+    rollbackHint?: string;
+  } | null;
+  local: { repointAuditId: string; movedPreTickets: number; movedJobs: number };
+  note?: string;
+}
+
+export interface MergeRollbackResult {
+  status: 'rolled_back';
+  content: {
+    rolledBack: boolean;
+    auditId: string;
+    eventId: string;
+    survivorId: string;
+    restoredLosers: string[];
+    restored: { tickets: number; reservations: number; seats: number; giftCampaigns: number };
+  } | null;
+  local: { movedPreTickets: number; movedJobs: number } | null;
+  warning?: string;
 }

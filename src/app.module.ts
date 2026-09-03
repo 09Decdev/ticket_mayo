@@ -11,6 +11,7 @@ import { CheckInModule } from './modules/check-in/check-in.module';
 import { StatsModule } from './modules/stats/stats.module';
 import { TicketPortalModule } from './modules/ticket-portal/ticket-portal.module';
 import { ClaimModule } from './modules/claim/claim.module';
+import { TicketMergeModule } from './modules/ticket-merge/ticket-merge.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ClaimModule } from './modules/claim/claim.module';
     StatsModule,
     TicketPortalModule,
     ClaimModule,
+    TicketMergeModule,
   ],
 })
 export class AppModule {}
