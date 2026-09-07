@@ -4,6 +4,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, DistributionStatus, type DistributionJob } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -19,6 +21,8 @@ import {
   type MintRecipientResult,
 } from '../content-client/content-client.service';
 import { DistributeRequestDto } from './dtos/distribute-request.dto';
+import { PrintRequestDto } from './dtos/print-request.dto';
+import { TicketPdfStorageService, ZipEntry } from '../ticket-pdf-storage/ticket-pdf-storage.service';
 
 @Injectable()
 export class DistributionService {
@@ -31,6 +35,10 @@ export class DistributionService {
     private readonly eventService: EventService,
     private readonly userCommunity: UserCommunityClientService,
     private readonly content: ContentClientService,
+    // Tùy chọn (thứ 7) — spec cũ new 6 args vẫn compile; @Optional để module
+    // khác dùng DistributionService mà không cần import TicketPdfStorageModule.
+    // Thiếu → endpoint zip trả 503.
+    @Optional() private readonly pdfStorage?: TicketPdfStorageService,
   ) {}
 
   async distribute(dto: DistributeRequestDto, adminId: string) {
@@ -800,4 +808,354 @@ export class DistributionService {
     });
     return `${date} | ${time} – ${endtime}`;
   }
+
+  // ─── VÉ CỨNG (physical tickets để in) ───
+
+  /**
+   * VÉ CỨNG: mint N vé "không người nhận" + render PDF (họ tên "Vé nhà tài
+   * trợ", PII trống) + upload SeaweedFS — admin tải zip gửi đối tác in.
+   * QR static signed in trên PDF → vé check-in được qua app như vé thường.
+   *
+   * Kiến trúc ZERO-MIGRATION: tái dùng bảng DistributionJob/PreTicket nguyên vẹn,
+   * discriminate bằng `mintMode='PRINT'` (String tự do — không enum, không cần
+   * migration). PreTicket.recipientEmailHash non-null → dùng PLACEHOLDER hash
+   * deterministic (generateEmailHash chuỗi đặc biệt 've-cung-khong-nguoi-nhan'):
+   * hex64 hợp lệ với content DTO @IsHexadecimal@Length(64), deterministic (mọi
+   * worker tính ra cùng giá trị), và KHÔNG BAO GIỜ trùng hash email thật nên
+   * linkTicketsByEmail WHERE recipientEmailHash=? AND userId IS NULL không bao
+   * giờ link nhầm vé cứng vào tài khoản người dùng.
+   */
+  private static readonly PRINT_EMAIL_HASH = generateEmailHash('ve-cung-khong-nguoi-nhan');
+
+  /**
+   * Số vé in render PDF song song — mirror MAIL_DISPATCH_CONCURRENCY=4 của
+   * mail-dispatcher (content PDF route chịu tải tương đương email flow;
+   * 5000 vé × ~300KB / 4 luồng vẫn xong trong vài phút, không thêm cron/queue
+   * theo yêu cầu briefing).
+   */
+  private static readonly PRINT_PDF_CONCURRENCY = 4;
+
+  async createPrintJob(dto: PrintRequestDto, adminId: string) {
+    const startTs = Date.now();
+    // 1. Idempotency — same pattern distribute.
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.distributionJob.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        this.logger.log(`[PRINT] idempotency hit — returning existing job ${existing.id}`);
+        return { job: existing };
+      }
+    }
+
+    // 2. Resolve TT — cần emailDistribution/requireProof nên đọc raw content
+    //    (getTicketTypeWithEvent không trả 2 field này).
+    const ttRaw = await this.content.getTicketType(dto.ticketTypeId);
+    if (!ttRaw) {
+      throw new NotFoundException(`Ticket type ${dto.ticketTypeId} not found.`);
+    }
+    const emailDistribution = (ttRaw as { emailDistribution?: boolean }).emailDistribution ?? false;
+    const requireProof = (ttRaw as { requireProof?: boolean }).requireProof ?? false;
+    const eventId = ttRaw.eventId;
+    const name = ttRaw.name;
+    const remaining = ttRaw.remaining;
+
+    // 2b. Pre-check gates NGAY (content sẽ chặn lại lúc mint — layer cuối):
+    //     - emailDistribution=false → mint 400 → job FAILED rác. Chặn sớm 400.
+    //     - requireProof=true → mint vé KHÔNG người nhận KHÔNG THỂ có proof
+    //       verified → 400 TICKET_PROOF_NOT_VERIFIED chắc chắn. Chặn sớm + msg rõ.
+    if (!emailDistribution) {
+      throw new ConflictException({
+        code: 'TICKET_EMAIL_DISTRIBUTION_NOT_ALLOWED',
+        message: `Loại vé ${name} không bật phát vé (emailDistribution=false) — không thể tạo vé in.`,
+        ticketTypeId: ttRaw.id,
+      });
+    }
+    if (requireProof) {
+      throw new ConflictException({
+        code: 'TICKET_PRINT_PROOF_UNSUPPORTED',
+        message: `Loại vé ${name} yêu cầu minh chứng nhiệm vụ — vé in không gắn người nhận nên không thể xác minh. Dùng loại vé khác.`,
+        ticketTypeId: ttRaw.id,
+      });
+    }
+
+    // 3. Quota pre-check — mirror distribute (mint vẫn là layer chống race cuối).
+    if (Number.isFinite(remaining) && dto.quantity > remaining) {
+      throw new ConflictException({
+        code: 'TICKET_QUOTA_EXCEEDED',
+        message: `Số vé yêu cầu (${dto.quantity}) vượt quá số vé còn lại (${remaining}/${ttRaw.quantity}).`,
+        remaining,
+        requested: dto.quantity,
+      });
+    }
+
+    // 4. Job + PreTickets (zero-migration: mintMode='PRINT' discriminated).
+    const jobId = generateJobId();
+    const seeds = Array.from({ length: dto.quantity }, () => ({
+      recipientEmailHash: DistributionService.PRINT_EMAIL_HASH,
+      claimToken: generateClaimToken(),
+    }));
+    this.logger.log(
+      `[PRINT] start ticketType=${ttRaw.id} (${name}) qty=${dto.quantity} → ${seeds.length} PreTicket`,
+    );
+
+    let job: DistributionJob | null = null;
+    try {
+      job = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.distributionJob.create({
+          data: {
+            id: jobId,
+            ticketTypeId: ttRaw.id,
+            ticketTypeName: name,
+            eventName: ttRaw.event?.title ?? '',
+            eventId,
+            total: seeds.length,
+            status: 'RUNNING',
+            // VÉ CỨNG: mode PRINT — cùng dòng chảy mint EAGER nhưng KHÔNG email.
+            mintMode: 'PRINT',
+            idempotencyKey: dto.idempotencyKey ?? null,
+            createdBy: adminId,
+          },
+        });
+        await tx.preTicket.createMany({
+          data: seeds.map((s) => ({
+            jobId: created.id,
+            // Placeholder hash đặc biệt — xem comment PRINT_EMAIL_HASH.
+            recipientEmailHash: s.recipientEmailHash,
+            claimToken: s.claimToken,
+            ticketTypeId: ttRaw.id,
+            eventId,
+            ticketTypeName: name,
+            eventName: ttRaw.event?.title ?? '',
+            status: 'PENDING',
+            // KHÔNG gắn recipientUserId — vé cứng không có người nhận.
+          })),
+        });
+        return created;
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const existing = dto.idempotencyKey
+          ? await this.prisma.distributionJob.findUnique({
+              where: { idempotencyKey: dto.idempotencyKey },
+            })
+          : null;
+        if (existing) return { job: existing };
+      }
+      throw err;
+    }
+    if (!job) throw new Error('Failed to create print job');
+
+    await this.audit.record({
+      jobId: job.id,
+      action: 'DISTRIBUTION_PRINT_START',
+      detail: { ticketTypeId: ttRaw.id, eventId, quantity: seeds.length, adminId },
+    });
+
+    // 5. Mint thật ở content (tái dùng nguyên mintEager — lock/gates/reconcile
+    //    Δ9a/partial-fail semantics giữ nguyên cho print). Fail → dừng ngay,
+    //    KHÔNG render PDF (vé không tồn tại thì không có gì để in).
+    try {
+      await this.mintEager(job, { id: ttRaw.id, eventId });
+    } catch (err) {
+      this.logger.warn(`[PRINT] job=${job.id} mint fail — dừng, không render PDF: ${(err as Error).message}`);
+      throw err;
+    }
+
+    // 6. Render + upload PDF từng vé in. KHÔNG gửi email.
+    //    QR token batch (chunk 500 fail-soft) → per-vé fetch PDF (token 'ey…'
+    //    mới fetch — mirror mail-dispatcher) → uploadPdf(buildPrintKey).
+    //    Lỗi từng vé → collect + log (job vẫn COMPLETED, zip sẽ liệt kê
+    //    missing qua _THIEU_PDF.txt) — admin tạo lại job cho số vé thiếu.
+    const renderReport = await this.renderAndUploadPrintPdfs(job.id);
+
+    // 7. Finalize.
+    await this.prisma.distributionJob.update({
+      where: { id: job.id },
+      data: { status: await this.finalizeJobStatus(job.id) },
+    });
+    const finalJob = await this.prisma.distributionJob.findUnique({ where: { id: job.id } });
+    this.logger.log(
+      `[PRINT] job=${job.id} DONE status=${finalJob?.status ?? ''} pdf: uploaded=${renderReport.uploaded} failed=${renderReport.failed}/${job.total} (${Date.now() - startTs}ms)`,
+    );
+    return { job: finalJob ?? job, pdf: renderReport };
+  }
+
+  /**
+   * VÉ CỨNG bước render: lấy MINTED PreTicket của job → QR token từ content
+   * (batch) → fetch PDF (PII trống) → upload print/<jobId>/<ticketId>.pdf.
+   * Trả về số uploaded/failed + ticketIds thiếu — KHÔNG throw (mint đã thành
+   * công, vé đã tồn tại thật; thiếu PDF chỉ ảnh hưởng zip tải in).
+   */
+  private async renderAndUploadPrintPdfs(
+    jobId: string,
+  ): Promise<{ uploaded: number; failed: number; failedTicketIds: string[] }> {
+    if (!this.pdfStorage?.enabled) {
+      // S3 thiếu → PDF chưa render được nhưng vé ĐÃ mint — job vẫn hoàn tất;
+      // admin bật S3 rồi tải zip sẽ thấy missing. Log ERROR cho ops thấy ngay.
+      this.logger.error(
+        `[PRINT] job=${jobId}: S3 chưa cấu hình — đã mint vé nhưng CHƯA render PDF in (bật S3_* để zip được).`,
+      );
+      return { uploaded: 0, failed: 0, failedTicketIds: [] };
+    }
+    const minted = await this.prisma.preTicket.findMany({
+      where: { jobId, status: { in: ['MINTED', 'LINKED', 'CLAIMED'] }, contentTicketId: { not: null } },
+      // contentTicketCode: mã vé THẬT in dưới QR trên PDF in.
+      select: { contentTicketId: true, contentTicketCode: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const ticketIds = minted.map((m) => m.contentTicketId!).filter(Boolean);
+    // Mã vé thật theo ticketId — render PDF in dùng (hiển thị dưới QR).
+    const codeById = new Map(
+      minted.filter((m) => m.contentTicketCode).map((m) => [m.contentTicketId!, m.contentTicketCode!]),
+    );
+    if (ticketIds.length === 0) {
+      this.logger.warn(`[PRINT] job=${jobId}: 0 vé MINTED — bỏ qua render PDF.`);
+      return { uploaded: 0, failed: 0, failedTicketIds: [] };
+    }
+
+    // QR static token batch — fail-soft từng chunk (content-client warn).
+    const tokenById = await this.content.getTicketQrTokens(ticketIds);
+
+    let uploaded = 0;
+    const failedTicketIds: string[] = [];
+    // Concurrency 4 — chạy song song giữ thứ tự upload không quan trọng
+    // (key S3 per-vé độc lập). runConcurrent của mail-dispatcher là
+    // module-private không export → tự triển khai loop cửa sổ tại chỗ.
+    const CONCURRENCY = DistributionService.PRINT_PDF_CONCURRENCY;
+    let cursor = 0;
+    // Arrow fn giữ lexical `this` (this.logger) — KHÔNG dùng function declaration.
+    const worker = async (storage: TicketPdfStorageService): Promise<void> => {
+      while (cursor < ticketIds.length) {
+        const idx = cursor++;
+        const ticketId = ticketIds[idx];
+        const token = tokenById.get(ticketId);
+        if (!token || !token.startsWith('ey')) {
+          failedTicketIds.push(ticketId);
+          continue;
+        }
+        try {
+          const buf = await storage.fetchPrintTicketPdf({
+            jobId,
+            ticketId,
+            qrToken: token,
+            ticketCode: codeById.get(ticketId) ?? null,
+          });
+          await storage.uploadPdf(storage.buildPrintKey({ jobId, ticketId }), buf);
+          uploaded++;
+        } catch (err) {
+          failedTicketIds.push(ticketId);
+          this.logger.warn(
+            `[PRINT] render/upload fail ticket=${ticketId} job=${jobId}: ${(err as Error).message}`,
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, ticketIds.length) }, () => worker(this.pdfStorage!)),
+    );
+    if (failedTicketIds.length > 0) {
+      this.logger.error(
+        `[PRINT] job=${jobId}: ${failedTicketIds.length}/${ticketIds.length} vé THIẾU PDF: ${failedTicketIds.slice(0, 20).join(', ')}${failedTicketIds.length > 20 ? '…' : ''}`,
+      );
+    }
+    return { uploaded, failed: failedTicketIds.length, failedTicketIds };
+  }
+
+  /**
+   * VÉ CỨNG: plan zip tải in — CHỈ PreTicket thuộc job mintMode='PRINT' (không
+   * trộn PDF email/ có PII), key print/<jobId>/<ticketId>.pdf.
+   */
+  async buildPrintPdfZipPlan(
+    ticketTypeId: string,
+  ): Promise<{ entries: ZipEntry[]; folder: string; zipName: string }> {
+    if (!this.pdfStorage?.enabled) {
+      throw new ServiceUnavailableException(
+        'Server chưa cấu hình S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY — không tải được zip vé in.',
+      );
+    }
+    // Lọc theo job PRINT — khác email zip (qua MỌI job): vé in phải tách nguồn.
+    const printJobs = await this.prisma.distributionJob.findMany({
+      where: { ticketTypeId, mintMode: 'PRINT' },
+      select: { id: true },
+    });
+    if (printJobs.length === 0) {
+      throw new NotFoundException(
+        'Chưa có job vé in nào cho loại vé này — tạo vé cứng trước đã.',
+      );
+    }
+    const rows = await this.prisma.preTicket.findMany({
+      where: {
+        ticketTypeId,
+        jobId: { in: printJobs.map((j) => j.id) },
+        contentTicketId: { not: null },
+        status: { in: ['MINTED', 'LINKED', 'CLAIMED'] },
+      },
+      select: { jobId: true, contentTicketId: true, contentTicketCode: true, ticketTypeName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (rows.length === 0) {
+      throw new NotFoundException('Job vé in đã tạo nhưng chưa có vé nào được mint (job FAILED?).');
+    }
+
+    const sanitize = (s: string) => s.replace(/[\\/:*?"<>|]/g, '_').trim();
+    let folder = sanitize(rows[0].ticketTypeName ?? '');
+    if (!folder) folder = `ticket-type-${ticketTypeId}`;
+    const entries: ZipEntry[] = rows.map((r) => ({
+      key: this.pdfStorage!.buildPrintKey({ jobId: r.jobId, ticketId: r.contentTicketId! }),
+      name: `${sanitize(r.contentTicketCode ?? r.contentTicketId!) || r.contentTicketId!}.pdf`,
+    }));
+    // Folder zip đè tiền tố 'Ve in - ' để admin phân biệt với zip email.
+    return { entries, folder: `Ve in - ${folder}`, zipName: `Ve in - ${folder}.zip` };
+  }
+
+  // ─── ZIP PDF (luồng email) — kế hoạch zip toàn bộ PDF đã archive ───
+
+  /**
+   * Zip PDF của CẢ LOẠI VÉ theo luồng email (mọi job, không lọc mintMode —
+   * nhưng key luôn là email/<jobId>/... nên PDF vé in không bao giờ lọt vào).
+   */
+  async buildPdfZipPlan(
+    ticketTypeId: string,
+  ): Promise<{ entries: ZipEntry[]; folder: string; zipName: string }> {
+    if (!this.pdfStorage?.enabled) {
+      throw new ServiceUnavailableException(
+        'Server chưa cấu hình S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY — không tải được zip PDF.',
+      );
+    }
+    const rows = await this.prisma.preTicket.findMany({
+      where: {
+        ticketTypeId,
+        contentTicketId: { not: null },
+        status: { in: ['MINTED', 'LINKED', 'CLAIMED'] },
+      },
+      select: { jobId: true, contentTicketId: true, contentTicketCode: true, ticketTypeName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (rows.length === 0) {
+      throw new NotFoundException(
+        'Chưa có PDF nào được lưu cho loại vé này — vé phải được bắn email khi S3 đã bật.',
+      );
+    }
+
+    // Tên file/folder loại bỏ ký tự không hợp lệ trên Windows/macOS zip client.
+    const sanitize = (s: string) => s.replace(/[\\/:*?"<>|]/g, '_').trim();
+    let folder = sanitize(rows[0].ticketTypeName ?? '');
+    if (!folder) {
+      try {
+        const tt = await this.eventService.getTicketTypeWithEvent(ticketTypeId);
+        folder = sanitize(tt?.name ?? '');
+      } catch {
+        // content-service chết — vẫn zip được bằng fallback bên dưới.
+      }
+    }
+    if (!folder) folder = `ticket-type-${ticketTypeId}`;
+
+    const entries: ZipEntry[] = rows.map((r) => ({
+      key: this.pdfStorage!.buildEmailKey({ jobId: r.jobId, ticketId: r.contentTicketId! }),
+      name: `${sanitize(r.contentTicketCode ?? r.contentTicketId!) || r.contentTicketId!}.pdf`,
+    }));
+    return { entries, folder, zipName: `${folder}.zip` };
+  }
+
 }

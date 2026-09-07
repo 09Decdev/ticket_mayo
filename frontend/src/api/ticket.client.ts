@@ -235,6 +235,30 @@ export const ticketClient = {
       throw toApiError(e);
     }
   },
+
+  /**
+   * VÉ CỨNG: mint N vé không người nhận + render PDF in (PII trống) + upload
+   * bucket. Sync như createDistribution — timeout cao vì render vài nghìn PDF
+   * có thể lâu hơn 30s default (5 phút an toàn cho 5000 vé).
+   */
+  async createPrintDistribution(body: {
+    ticketTypeId: string;
+    quantity: number;
+    idempotencyKey?: string;
+  }): Promise<{ job: DistributionJob; pdf?: { uploaded: number; failed: number } }> {
+    try {
+      const res: any = await http.post('/admin/distributions/print', body, {
+        validateStatus: (s) => s >= 200 && s < 300,
+        timeout: 300_000,
+      });
+      return (res?.data?.job ? res.data : res) as {
+        job: DistributionJob;
+        pdf?: { uploaded: number; failed: number };
+      };
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
   async listDistributions(params?: { page?: number; limit?: number }): Promise<{ data: DistributionJob[]; meta?: any }> {
     try {
       const res: any = await unwrap<unknown>(http.get(`/admin/distributions${qs(params)}`));
@@ -252,6 +276,47 @@ export const ticketClient = {
     } catch (e) {
       throw toApiError(e);
     }
+  },
+
+  /** ZIP toàn bộ PDF vé đã archive của 1 loại vé (server stream, có thể lâu → timeout 2 phút). */
+  async downloadTicketTypePdfsZip(ticketTypeId: string): Promise<Blob> {
+    // XHR-blob bị Edge abort giữa chừng với response chunked lớn (~58MB) —
+    // net::ERR_FAILED 200 (OK) dù server trả đủ. fetch() không đi qua XHR
+    // nên tránh được bug này; lỗi HTTP vẫn map status cho caller (404/503/409).
+    const res = await fetch(
+      `${TICKET_BASE}${PREFIX}/admin/distributions/ticket-types/${encodeURIComponent(ticketTypeId)}/pdfs.zip`,
+      {
+        headers: { Authorization: `Bearer ${getJwt() ?? ''}` },
+        signal: AbortSignal.timeout(120_000),
+      },
+    );
+    if (!res.ok) {
+      throw toApiError({
+        isAxiosError: true,
+        response: { status: res.status, data: await res.json().catch(() => null) },
+        message: `HTTP ${res.status}`,
+      });
+    }
+    return res.blob();
+  },
+
+  /** VÉ CỨNG: zip CHỈ PDF vé in (job PRINT — PII trống) của 1 loại vé. */
+  async downloadTicketTypePrintPdfsZip(ticketTypeId: string): Promise<Blob> {
+    const res = await fetch(
+      `${TICKET_BASE}${PREFIX}/admin/distributions/ticket-types/${encodeURIComponent(ticketTypeId)}/print-pdfs.zip`,
+      {
+        headers: { Authorization: `Bearer ${getJwt() ?? ''}` },
+        signal: AbortSignal.timeout(120_000),
+      },
+    );
+    if (!res.ok) {
+      throw toApiError({
+        isAxiosError: true,
+        response: { status: res.status, data: await res.json().catch(() => null) },
+        message: `HTTP ${res.status}`,
+      });
+    }
+    return res.blob();
   },
 
   async checkIn(body: { ticketCode: string; gateId?: string }): Promise<CheckInResult> {

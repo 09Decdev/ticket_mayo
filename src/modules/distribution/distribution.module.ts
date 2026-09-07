@@ -6,6 +6,7 @@ import { AuditModule } from '../audit/audit.module';
 import { EventModule } from '../event/event.module';
 import { UserCommunityClientModule } from '../user-community-client/user-community-client.module';
 import { ContentClientModule } from '../content-client/content-client.module';
+import { TicketPdfStorageModule } from '../ticket-pdf-storage/ticket-pdf-storage.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ContentClientModule } from '../content-client/content-client.module';
     EventModule,
     UserCommunityClientModule,
     ContentClientModule,
+    TicketPdfStorageModule,
   ],
   controllers: [DistributionController],
   providers: [DistributionService],

@@ -1,4 +1,7 @@
 import { env } from '../../config/env';
+import {
+  ArchiveTicketPdfInput,
+} from '../ticket-pdf-storage/ticket-pdf-storage.service';
 import { MailDispatcherService } from './mail-dispatcher.service';
 import { ClaimMailPayload } from './mail.adapter';
 import sharp from 'sharp';
@@ -174,6 +177,59 @@ describe('MailDispatcherService — event banner CID inline', () => {
 
     const p = sendMock.mock.calls[0][0] as ClaimMailPayload;
     expect(p.html).toContain('http://localhost:5174/c/tok-pdfx2');
+  });
+});
+
+// ─── VÉ-PDF-BUCKET: PDF vé phát qua email được archive vào SeaweedFS SAU khi send ok ───
+describe('MailDispatcherService — archive PDF vào bucket sau khi gửi mail', () => {
+  const SIGNED = 'eyJhbGciOiJFZERTQSIsImtpZCI6InQifQ.abc.def';
+
+  function makeServiceWithStorage(sendMock: jest.Mock) {
+    const archiveMock = jest.fn(async (_input: ArchiveTicketPdfInput) => {});
+    const service = new MailDispatcherService(
+      { send: sendMock } as never,
+      {
+        getTicketQrTokens: jest.fn(async () => new Map([['tk-1', SIGNED]])),
+      } as never,
+      { enabled: true, archiveTicketPdf: archiveMock } as never,
+    );
+    (service as unknown as { getTemplate: () => string }).getTemplate = () =>
+      '<b>{{ticketCode}}</b>';
+    (service as unknown as { generateQrWithLogo: () => Promise<Buffer> }).generateQrWithLogo =
+      jest.fn(async () => Buffer.from('fake-qr'));
+    return { service, archiveMock };
+  }
+
+  it('send ok + ticketId + signed token → archiveTicketPdf gọi đúng input, dispatch ok', async () => {
+    const sendMock = jest.fn(async () => {});
+    const { service, archiveMock } = makeServiceWithStorage(sendMock);
+
+    const res = await service.dispatchBatch([
+      makePayload({ claimToken: 'tok-a1', ticketId: 'tk-1', ticketCode: 'C1' }),
+    ]);
+
+    expect(res.dispatched).toBe(1);
+    expect(archiveMock).toHaveBeenCalledTimes(1);
+    expect(archiveMock.mock.calls[0][0]).toMatchObject({
+      jobId: 'job-1',
+      ticketId: 'tk-1',
+      qrToken: SIGNED,
+      ticketCode: 'C1',
+    });
+  });
+
+  it('send fail → KHÔNG archive (chỉ lưu vé đã bắn email thành công)', async () => {
+    const sendMock = jest.fn(async () => {
+      throw new Error('smtp down');
+    });
+    const { service, archiveMock } = makeServiceWithStorage(sendMock);
+
+    const res = await service.dispatchBatch([
+      makePayload({ claimToken: 'tok-a2', ticketId: 'tk-1', ticketCode: 'C1' }),
+    ]);
+
+    expect(res.failed).toBe(1);
+    expect(archiveMock).not.toHaveBeenCalled();
   });
 });
 

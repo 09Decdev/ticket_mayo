@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import sharp from 'sharp';
 import { env } from '../../config/env';
 import { ContentClientService } from '../content-client/content-client.service';
+import { TicketPdfStorageService } from '../ticket-pdf-storage/ticket-pdf-storage.service';
 import { CidAttachment, ClaimMailPayload, MailAdapter } from './mail.adapter';
 import { renderTicketEmailHtml } from './ticket-email.renderer';
 
@@ -91,6 +92,8 @@ export class MailDispatcherService {
   constructor(
     private readonly adapter: MailAdapter,
     private readonly content: ContentClientService,
+    // Tùy chọn — spec cũ vẫn new 2 tham số. Thiếu/là undefined → không archive PDF.
+    private readonly pdfStorage?: TicketPdfStorageService,
   ) {}
 
   /** Load template 1 lần + cache. Throw nếu thiếu — không gửi được mail không có template. */
@@ -432,11 +435,12 @@ export class MailDispatcherService {
     // P2: concurrency giới hạn (4) — QR gen + fetch ảnh + render + send chạy
     // song song; results ghi theo index → thứ tự y hệt payload order.
     await runConcurrent(payloads, MAIL_DISPATCH_CONCURRENCY, async (p, i) => {
+      let qrContent = '';
       try {
         if (!p.html) {
           // QR: signed static token (content — LRU cache) with logo, attach as CID
           const qrCid = `qr-${p.claimToken}`;
-          const qrContent = this.resolveQrPayload(p);
+          qrContent = this.resolveQrPayload(p);
           const qrBuffer = await this.generateQrWithLogo(qrContent);
           const qrUrl = `cid:${qrCid}`;
 
@@ -486,6 +490,26 @@ export class MailDispatcherService {
         await this.adapter.send(p);
         dispatched++;
         results[i] = { claimToken: p.claimToken, ok: true };
+        // Archive PDF vé xuống bucket SeaweedFS (key email/<jobId>/<ticketId>.pdf)
+        // SAU khi email gửi thành công — archiveTicketPdf fail-soft nội bộ, mọi
+        // lỗi S3/content chỉ log warn, không đổi kết quả dispatch. resendEmails
+        // build payload mới (không html) → cũng qua đây; PutObject cùng key ghi
+        // đè = idempotent.
+        if (this.pdfStorage?.enabled && p.ticketId && qrContent.startsWith('ey')) {
+          await this.pdfStorage.archiveTicketPdf({
+            jobId: p.jobId,
+            ticketId: p.ticketId,
+            qrToken: qrContent,
+            // Mã vé thật in dưới QR (ClaimMailPayload có sẵn từ bước mint).
+            ticketCode: p.ticketCode,
+            attendee: {
+              name: p.customerName,
+              phone: p.customerPhone,
+              email: p.email,
+              bookedAt: p.bookedAt,
+            },
+          });
+        }
       } catch (err) {
         failed++;
         results[i] = { claimToken: p.claimToken, ok: false };

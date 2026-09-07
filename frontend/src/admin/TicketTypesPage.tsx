@@ -36,6 +36,89 @@ export function TicketTypesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
+  // VÉ-PDF-ZIP: nút "Tải PDF" gói toàn bộ PDF đã archive của loại vé (server stream zip).
+  const [zippingId, setZippingId] = useState<string | null>(null);
+
+  // VÉ CỨNG: form tạo vé in (quantity) + nút tải zip vé in.
+  const [printId, setPrintId] = useState<string | null>(null);
+  const [printQty, setPrintQty] = useState('100');
+  const [printingId, setPrintingId] = useState<string | null>(null);
+  const [printZipId, setPrintZipId] = useState<string | null>(null);
+
+  async function onDownloadPdfZip(t: TicketType) {
+    setZippingId(t.id);
+    setError(null);
+    try {
+      const blob = await ticketClient.downloadTicketTypePdfsZip(t.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${t.name}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke trễ — Firefox/Chrome cần URL sống vài trăm ms sau click để bắt download.
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e: any) {
+      // Body lỗi là Blob (responseType) → message JSON không đọc được, map theo status.
+      if (e?.status === 404) setError(`Chưa có PDF nào được lưu cho loại vé "${t.name}".`);
+      else if (e?.status === 503) setError('Server chưa cấu hình bucket S3 để lưu PDF vé.');
+      else setError(e?.message || 'Tải zip PDF thất bại.');
+    } finally {
+      setZippingId(null);
+    }
+  }
+
+  // VÉ CỨNG: tạo job mint vé in + render PDF (sync, có thể lâu — disable form).
+  async function onCreatePrint(t: TicketType) {
+    const qty = Number(printQty) || 0;
+    if (!qty || qty < 1) return;
+    setPrintingId(t.id);
+    setError(null);
+    try {
+      const res = await ticketClient.createPrintDistribution({ ticketTypeId: t.id, quantity: qty });
+      if (res.pdf && res.pdf.failed > 0) {
+        setError(
+          `Đã tạo ${res.pdf.uploaded} vé in nhưng ${res.pdf.failed} vé thiếu PDF — tải zip xem danh sách _THIEU_PDF.txt.`,
+        );
+      }
+      setPrintId(null);
+    } catch (e: any) {
+      // 409 quota body có remaining/requested — hiển thị thân thiện.
+      if (e?.status === 409 && typeof e.remaining === 'number') {
+        setError(
+          `Không đủ vé: còn ${e.remaining} vé, yêu cầu ${e.requested ?? qty}.`,
+        );
+      } else {
+        setError(e?.message || 'Tạo vé in thất bại.');
+      }
+    } finally {
+      setPrintingId(null);
+    }
+  }
+
+  async function onDownloadPrintZip(t: TicketType) {
+    setPrintZipId(t.id);
+    setError(null);
+    try {
+      const blob = await ticketClient.downloadTicketTypePrintPdfsZip(t.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Ve in - ${t.name}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e: any) {
+      if (e?.status === 404) setError(`Chưa có vé in nào cho loại vé "${t.name}".`);
+      else if (e?.status === 503) setError('Server chưa cấu hình bucket S3 để lưu PDF vé in.');
+      else setError(e?.message || 'Tải zip vé in thất bại.');
+    } finally {
+      setPrintZipId(null);
+    }
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -395,6 +478,38 @@ export function TicketTypesPage() {
                       )}
                     </td>
                     <td>
+                      {(t.sold ?? 0) > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-link"
+                          disabled={zippingId != null}
+                          onClick={() => onDownloadPdfZip(t)}
+                        >
+                          {zippingId === t.id ? 'Đang gói…' : 'Tải PDF'}
+                        </button>
+                      )}
+                      {/* VÉ CỨNG: 2 nút riêng — chỉ loại vé emailDistribution (gate
+                          mint), không cho loại requireProof (mint chắc chắn fail). */}
+                      {t.emailDistribution && !t.requireProof && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-link"
+                            disabled={printingId != null}
+                            onClick={() => setPrintId(printId === t.id ? null : t.id)}
+                          >
+                            Vé in
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-link"
+                            disabled={printZipId != null}
+                            onClick={() => onDownloadPrintZip(t)}
+                          >
+                            {printZipId === t.id ? 'Đang gói…' : 'Tải vé in'}
+                          </button>
+                        </>
+                      )}
                       <Link className="btn btn-link" to={`/admin/ticket-types/${t.id}/edit`}>
                         Sửa
                       </Link>
@@ -459,6 +574,55 @@ export function TicketTypesPage() {
                       </Button>
                     </>
                   )}
+                </div>
+              </div>
+            );
+          })()}
+        </Card>
+      )}
+
+      {/* VÉ CỨNG: form nhập số lượng vé in khi bấm "Vé in" ở 1 dòng. */}
+      {printId != null && (
+        <Card title="Tạo vé in (vé cứng cho nhà tài trợ)">
+          {(() => {
+            const t = types.find((x) => x.id === printId);
+            if (!t) return null;
+            return (
+              <div>
+                <p style={{ margin: '0 0 16px' }}>
+                  Mint <strong>{Number(printQty) || 0}</strong> vé <strong>{t.name}</strong> không
+                  gắn người nhận — PDF in tên &quot;Vé nhà tài trợ&quot;, SĐT/email để trống, QR
+                  thật quét được khi check-in. Tải zip ở nút &quot;Tải vé in&quot; sau khi tạo xong.
+                </p>
+                <div className="form-field">
+                  <label htmlFor="tt-print-qty">Số lượng vé in (tối đa 5000/lần)</label>
+                  <input
+                    id="tt-print-qty"
+                    type="number"
+                    min="1"
+                    max="5000"
+                    step="1"
+                    inputMode="numeric"
+                    value={printQty}
+                    onChange={(e) => setPrintQty(e.target.value)}
+                    aria-describedby="tt-print-qty-hint"
+                  />
+                  <div className="hint" id="tt-print-qty-hint">
+                    Vé trừ vào hạn mức loại vé (còn {t.remaining ?? '?'}). Lớn hơn 5000: tách nhiều lần.
+                  </div>
+                </div>
+                <div className="form-actions" style={{ borderTop: 'none', paddingTop: 0 }}>
+                  <Button variant="secondary" type="button" disabled={printingId != null} onClick={() => setPrintId(null)}>
+                    Hủy
+                  </Button>
+                  <Button
+                    type="button"
+                    loading={printingId === t.id}
+                    disabled={printingId != null || !(Number(printQty) >= 1)}
+                    onClick={() => onCreatePrint(t)}
+                  >
+                    {printingId === t.id ? 'Đang mint + render PDF…' : 'Tạo vé in'}
+                  </Button>
                 </div>
               </div>
             );

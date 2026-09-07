@@ -832,6 +832,8 @@ describe('Backfill T7 — backfill.runner', () => {
         {} as unknown as import('./distribution.service').DistributionService,
         prismaMock as unknown as import('../../prisma/prisma.service').PrismaService,
         contentMock as unknown as import('../content-client/content-client.service').ContentClientService,
+        // zip PDF không dùng trong backfillDryRun — stub rỗng.
+        {} as unknown as import('../ticket-pdf-storage/ticket-pdf-storage.service').TicketPdfStorageService,
       );
 
       const report = (await controller.backfillDryRun('2', 'job-a')) as {
@@ -860,6 +862,8 @@ describe('Backfill T7 — backfill.runner', () => {
         {} as unknown as import('./distribution.service').DistributionService,
         prismaMock as unknown as import('../../prisma/prisma.service').PrismaService,
         contentMock as unknown as import('../content-client/content-client.service').ContentClientService,
+        // zip PDF không dùng trong backfillDryRun — stub rỗng.
+        {} as unknown as import('../ticket-pdf-storage/ticket-pdf-storage.service').TicketPdfStorageService,
       );
       await expect(controller.backfillDryRun('abc', undefined)).rejects.toThrow(HttpException);
       expect(prismaMock.preTicket.findMany).not.toHaveBeenCalled(); // fail fast, không quét DB

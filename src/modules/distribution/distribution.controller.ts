@@ -3,20 +3,25 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
   HttpStatus,
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RequestUser } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DistributionService } from './distribution.service';
 import { DistributeRequestDto } from './dtos/distribute-request.dto';
+import { PrintRequestDto } from './dtos/print-request.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ContentClientService } from '../content-client/content-client.service';
+import { TicketPdfStorageService } from '../ticket-pdf-storage/ticket-pdf-storage.service';
 import {
   parseBackfillLimit,
   parseDbHost,
@@ -32,6 +37,7 @@ export class DistributionController {
     private readonly service: DistributionService,
     private readonly prisma: PrismaService,
     private readonly content: ContentClientService,
+    private readonly pdfStorage: TicketPdfStorageService,
   ) {}
 
   @Post()
@@ -39,6 +45,18 @@ export class DistributionController {
   @ApiOperation({ summary: 'Create a ticket distribution job (idempotent by idempotencyKey)' })
   distribute(@Body() dto: DistributeRequestDto, @CurrentUser() user: RequestUser) {
     return this.service.distribute(dto, user.id);
+  }
+
+  // VÉ CỨNG: mint N vé không người nhận + render PDF (PII trống) lên bucket —
+  // sync theo yêu cầu HTTP như distribute (quantity ≤5000, KHÔNG cron/queue).
+  @Post('print')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary:
+      'Vé cứng: mint N vé không người nhận + render PDF in (QR thật, PII trống) + upload S3 (idempotent by idempotencyKey)',
+  })
+  createPrint(@Body() dto: PrintRequestDto, @CurrentUser() user: RequestUser) {
+    return this.service.createPrintJob(dto, user.id);
   }
 
   @Get('backfill/dry-run')
@@ -79,6 +97,74 @@ export class DistributionController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   list(@Query('page') page?: string, @Query('limit') limit?: string) {
     return this.service.list(page ? Number(page) : 1, limit ? Number(limit) : 20);
+  }
+
+  // ZIP PDF của CẢ LOẠI VÉ (mọi job) — stream thẳng qua @Res nên exception
+  // filter của Nest KHÔNG áp dụng; tự map status trong try/catch. Route tĩnh
+  // 'ticket-types' đặt trước ':id/status' để không bị tham số nuốt.
+  @Get('ticket-types/:ticketTypeId/pdfs.zip')
+  @ApiOperation({
+    summary: 'Tải zip toàn bộ PDF vé đã archive của 1 loại vé (1 folder = tên loại vé)',
+  })
+  async downloadTicketTypePdfsZip(
+    @Param('ticketTypeId') ticketTypeId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      const plan = await this.service.buildPdfZipPlan(ticketTypeId);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename*=UTF-8''${encodeURIComponent(plan.zipName)}`,
+      );
+      await this.pdfStorage.writeZip(plan.entries, plan.folder, res);
+    } catch (err) {
+      const status = err instanceof HttpException ? err.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      if (!res.headersSent) {
+        res
+          .status(status)
+          .json({
+            statusCode: status,
+            message: err instanceof HttpException ? err.message : 'Tạo zip PDF thất bại.',
+          });
+      } else {
+        // Đang stream dở mà lỗi → cắt kết nối để client không nhận zip cụt coi như hợp lệ.
+        res.destroy();
+      }
+    }
+  }
+
+  // VÉ CỨNG: zip CHỈ PDF vé in (job mintMode='PRINT') — route tĩnh đặt cạnh
+  // pdfs.zip, trước ':id/status' để không bị tham số nuốt.
+  @Get('ticket-types/:ticketTypeId/print-pdfs.zip')
+  @ApiOperation({
+    summary: 'Tải zip PDF vé in của 1 loại vé (folder "Ve in - <tên loại vé>")',
+  })
+  async downloadTicketTypePrintPdfsZip(
+    @Param('ticketTypeId') ticketTypeId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      const plan = await this.service.buildPrintPdfZipPlan(ticketTypeId);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename*=UTF-8''${encodeURIComponent(plan.zipName)}`,
+      );
+      await this.pdfStorage.writeZip(plan.entries, plan.folder, res);
+    } catch (err) {
+      const status = err instanceof HttpException ? err.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      if (!res.headersSent) {
+        res
+          .status(status)
+          .json({
+            statusCode: status,
+            message: err instanceof HttpException ? err.message : 'Tạo zip vé in thất bại.',
+          });
+      } else {
+        res.destroy();
+      }
+    }
   }
 
   @Get(':id/status')

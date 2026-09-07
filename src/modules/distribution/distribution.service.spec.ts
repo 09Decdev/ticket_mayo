@@ -19,7 +19,12 @@ process.env.PUBLIC_BASE_URL ??= 'http://localhost:5174';
 process.env.PORT ??= '3005';
 process.env.NODE_ENV ??= 'test';
 
-import { ConflictException, HttpException } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { DistributionService } from './distribution.service';
 import { MailDispatcherService } from '../mail-dispatcher/mail-dispatcher.service';
 import { AuditService } from '../audit/audit.service';
@@ -893,5 +898,78 @@ describe('DistributionService — EAGER mint flow (T5)', () => {
       });
       expect(status.preTickets).toHaveLength(2);
     });
+  });
+});
+
+// ─── VÉ-PDF-ZIP: buildPdfZipPlan — kế hoạch zip PDF đã archive của 1 loại vé ───
+describe('DistributionService — buildPdfZipPlan', () => {
+  const FAKE_STORAGE = {
+    enabled: true,
+    buildEmailKey: ({ jobId, ticketId }: { jobId: string; ticketId: string }) =>
+      `email/${encodeURIComponent(jobId)}/${encodeURIComponent(ticketId)}.pdf`,
+  };
+
+  function makeServiceWithPlan(
+    rows: Array<{ jobId: string; contentTicketId: string | null; contentTicketCode: string | null; ticketTypeName: string }>,
+    storage: unknown = FAKE_STORAGE,
+    eventService: unknown = {},
+  ) {
+    const findMany = jest.fn(async () => rows);
+    const prisma = { preTicket: { findMany } } as never;
+    const service = new DistributionService(
+      prisma,
+      undefined as never,
+      undefined as never,
+      eventService as never,
+      undefined as never,
+      undefined as never,
+      storage as never,
+    );
+    return { service, findMany };
+  }
+
+  it('pdfStorage thiếu/không enabled → 503, không query DB', async () => {
+    const { service, findMany } = makeServiceWithPlan([], { enabled: false });
+    await expect(service.buildPdfZipPlan('tt-1')).rejects.toThrow(ServiceUnavailableException);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('không có vé nào đã mint → 404', async () => {
+    const { service } = makeServiceWithPlan([]);
+    await expect(service.buildPdfZipPlan('tt-1')).rejects.toThrow(NotFoundException);
+  });
+
+  it('rows → entries key email/<jobId>/<ticketId>.pdf, name <code>.pdf sanitize, folder = ticketTypeName', async () => {
+    const { service, findMany } = makeServiceWithPlan([
+      { jobId: 'j-1', contentTicketId: 't-001', contentTicketCode: 'VIP/A:1', ticketTypeName: 'Vé VIP' },
+      { jobId: 'j-2', contentTicketId: 't-002', contentTicketCode: null, ticketTypeName: 'Vé VIP' },
+    ]);
+    const plan = await service.buildPdfZipPlan('tt-1');
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ ticketTypeId: 'tt-1' }),
+      }),
+    );
+    expect(plan.folder).toBe('Vé VIP');
+    expect(plan.zipName).toBe('Vé VIP.zip');
+    expect(plan.entries).toEqual([
+      { key: 'email/j-1/t-001.pdf', name: 'VIP_A_1.pdf' },
+      { key: 'email/j-2/t-002.pdf', name: 't-002.pdf' },
+    ]);
+  });
+
+  it('ticketTypeName rỗng + content chết (eventService throw) → fallback ticket-type-<id>', async () => {
+    const throwingEventService = {
+      getTicketTypeWithEvent: jest.fn(async () => {
+        throw new Error('content down');
+      }),
+    };
+    const { service } = makeServiceWithPlan(
+      [{ jobId: 'j', contentTicketId: 't', contentTicketCode: 'C', ticketTypeName: '' }],
+      FAKE_STORAGE,
+      throwingEventService,
+    );
+    const plan = await service.buildPdfZipPlan('tt-9');
+    expect(plan.folder).toBe('ticket-type-tt-9');
   });
 });

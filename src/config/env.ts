@@ -125,6 +125,28 @@ class EnvConfig {
   @IsString()
   PUBLIC_BASE_URL!: string;
 
+  /**
+   * SeaweedFS S3 (bucket lưu PDF vé luồng email). Thiếu 1 trong 3 key
+   * endpoint/access/secret → tính năng lưu PDF TẮT (email vẫn gửi bình thường).
+   * Endpoint nội bộ, vd http://127.0.0.1:8333 (container: http://seaweedfs-s3:8333).
+   */
+  @IsOptional()
+  @IsString()
+  S3_ENDPOINT?: string;
+
+  @IsOptional()
+  @IsString()
+  S3_ACCESS_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  S3_SECRET_KEY?: string;
+
+  /** Bucket chứa PDF vé phát qua email — PRIVATE (PDF chứa PII người nhận). */
+  @IsOptional()
+  @IsString()
+  S3_TICKET_PDF_BUCKET?: string;
+
   /** Base URL cho universal link nhận vé (mở app nếu đã cài, chưa cài về trang tải app). */
   @IsOptional()
   @IsString()
@@ -184,6 +206,10 @@ function loadRaw(): RawEnv {
     APP_STORE_URL: process.env.APP_STORE_URL ?? 'https://apps.apple.com/vn/app/mayogu/id6755509373',
     GOOGLE_PLAY_URL: process.env.GOOGLE_PLAY_URL ?? 'https://play.google.com/store/apps/details?id=com.mayogu.app&pcampaignid=web_share',
     PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL ?? 'http://localhost:5174',
+    S3_ENDPOINT: process.env.S3_ENDPOINT ?? '',
+    S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ?? '',
+    S3_SECRET_KEY: process.env.S3_SECRET_KEY ?? '',
+    S3_TICKET_PDF_BUCKET: process.env.S3_TICKET_PDF_BUCKET ?? 'ticket-email-pdfs',
     APP_UNIVERSAL_LINK_BASE:
       process.env.APP_UNIVERSAL_LINK_BASE ?? process.env.PUBLIC_BASE_URL ?? 'http://localhost:5174',
     TICKET_MAYO_BASE_URL: process.env.TICKET_MAYO_BASE_URL ?? '',
