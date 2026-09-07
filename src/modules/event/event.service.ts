@@ -35,6 +35,10 @@ type ContentTicketType = {
   note?: string | null;
   /** VÉ-EMAIL: true = chỉ phát qua email, được chọn ở bước phát vé. */
   emailDistribution?: boolean;
+  /** VÉ-MIỄN-PHÍ-MINH-CHỨNG: true = yêu cầu ảnh minh chứng trước khi phát vé. */
+  requireProof?: boolean;
+  /** VÉ-MIỄN-PHÍ-MINH-CHỨNG: mô tả nhiệm vụ cho AI kiểm tra ảnh. */
+  proofTaskDescription?: string | null;
   event?: {
     id: string;
     title: string;
@@ -119,8 +123,14 @@ export class EventService {
       price: dto.price ?? 0,
       quantity: dto.quota,
       typeCode: dto.codePrefix ?? undefined,
+      // MAX-PER-USER: truyền thẳng content (content default 4 khi không gửi).
+      maxTicketsPerUser: dto.maxTicketsPerUser ?? undefined,
       // VÉ-EMAIL: admin chọn lúc tạo (default false) — truyền thẳng content.
       emailDistribution: dto.emailDistribution ?? false,
+      // VÉ-MIỄN-PHÍ-MINH-CHỨNG: truyền thẳng content (content validate mô tả
+      // bắt buộc khi bật — 400 VALIDATION_ERROR nếu thiếu).
+      requireProof: dto.requireProof ?? false,
+      proofTaskDescription: dto.proofTaskDescription ?? undefined,
     });
     return this.mapTicketType(created);
   }
@@ -137,15 +147,28 @@ export class EventService {
   }
 
   /**
-   * Edit screen admin: sửa CHỈ name + quantity qua PATCH .../basic của content.
-   * Content validate quantity >= sold ở service layer (không tin client) —
-   * vi phạm → 400 TICKET_TYPE_QUANTITY_BELOW_SOLD (HttpException pass-through
-   * kèm sold trong response body — frontend hiển thị min quantity).
+   * Edit screen admin: sửa name + quantity + (VÉ-MIỄN-PHÍ-MINH-CHỨNG)
+   * requireProof/proofTaskDescription qua PATCH .../basic của content.
+   * Content validate quantity >= sold và requireProof cần mô tả ở service
+   * layer (không tin client) — vi phạm → 400 pass-through kèm sold/field
+   * trong response body — frontend hiển thị min quantity / lỗi thiếu mô tả.
    */
-  async updateTicketTypeBasic(id: string, dto: { name: string; quantity: number }) {
+  async updateTicketTypeBasic(
+    id: string,
+    dto: {
+      name: string;
+      quantity: number;
+      maxTicketsPerUser?: number;
+      requireProof?: boolean;
+      proofTaskDescription?: string;
+    },
+  ) {
     const updated = await this.content.updateTicketTypeBasic(id, {
       name: dto.name,
       quantity: dto.quantity,
+      maxTicketsPerUser: dto.maxTicketsPerUser,
+      requireProof: dto.requireProof,
+      proofTaskDescription: dto.proofTaskDescription,
     });
     return this.mapTicketType(updated);
   }
@@ -194,8 +217,9 @@ export class EventService {
   }
 
   /**
-   * Dữ liệu cho edit screen admin: CHỈ các field cần để sửa name + quantity
-   * (sold hiển thị read-only làm min quantity, remaining để hint).
+   * Dữ liệu cho edit screen admin: name + quantity + (VÉ-MIỄN-PHÍ-MINH-CHỨNG)
+   * requireProof/proofTaskDescription (sold hiển thị read-only làm min
+   * quantity, remaining để hint).
    */
   async getTicketTypeForEdit(id: string) {
     const tt = await this.content.getTicketType(id);
@@ -207,7 +231,12 @@ export class EventService {
       quantity: tt.quantity,
       sold: tt.sold,
       remaining: tt.remaining,
+      // MAX-PER-USER: điền form edit số vé tối đa mỗi người nhận.
+      maxTicketsPerUser: tt.maxTicketsPerUser ?? null,
       eventName: tt.event?.title ?? null,
+      // VÉ-MIỄN-PHÍ-MINH-CHỨNG: điền form edit proof flag + mô tả nhiệm vụ.
+      requireProof: (tt as ContentTicketType).requireProof ?? false,
+      proofTaskDescription: (tt as ContentTicketType).proofTaskDescription ?? null,
     };
   }
 
@@ -239,6 +268,9 @@ export class EventService {
       codePrefix: t.typeCode ?? null,
       // VÉ-EMAIL: lộ cho UI lọc ở bước phát vé.
       emailDistribution: t.emailDistribution ?? false,
+      // VÉ-MIỄN-PHÍ-MINH-CHỨNG: lộ cho UI (badge/label loại vé yêu cầu minh chứng).
+      requireProof: t.requireProof ?? false,
+      proofTaskDescription: t.proofTaskDescription ?? null,
     };
   }
 }

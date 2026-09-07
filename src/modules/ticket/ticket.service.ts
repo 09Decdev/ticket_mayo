@@ -65,6 +65,10 @@ export class TicketService {
         ticketTypeId: preTicket.ticketTypeId,
         userId,
         quantity: 1,
+        // VÉ-MIỄN-PHÍ-MINH-CHỨNG: gửi emailHash từ DB (recipientEmailHash) để
+        // content đối chiếu TicketTaskProof khi loại vé requireProof=true.
+        // Thiếu → content 400 TICKET_PROOF_NOT_VERIFIED (pass-through Δ7).
+        emailHash: preTicket.recipientEmailHash,
       });
       const ticket = result.tickets[0];
       if (!ticket) {

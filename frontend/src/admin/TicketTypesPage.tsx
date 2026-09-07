@@ -21,8 +21,14 @@ export function TicketTypesPage() {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [quota, setQuota] = useState('100');
+  // MAX-PER-USER: số vé tối đa mỗi người nhận — default 4 (mirror content).
+  const [maxTicketsPerUser, setMaxTicketsPerUser] = useState('4');
   const [codePrefix, setCodePrefix] = useState('');
   const [emailDistribution, setEmailDistribution] = useState(false);
+  // VÉ-MIỄN-PHÍ-MINH-CHỨNG: flag + mô tả nhiệm vụ lúc tạo loại vé (mirror
+  // emailDistribution; sửa được ở EditTicketTypePage sau khi tạo).
+  const [requireProof, setRequireProof] = useState(false);
+  const [proofTaskDescription, setProofTaskDescription] = useState('');
   const [saving, setSaving] = useState(false);
 
   // DELETE-INTERNAL: nút Xóa mỗi dòng — confirm trước khi gọi, disable khi
@@ -95,6 +101,8 @@ export function TicketTypesPage() {
   async function onCreate(e: FormEvent) {
     e.preventDefault();
     if (!eventId || !name.trim()) return;
+    // Bật requireProof → mô tả nhiệm vụ bắt buộc (content validate lại).
+    if (requireProof && proofTaskDescription.trim() === '') return;
     setSaving(true);
     setError(null);
     try {
@@ -103,14 +111,20 @@ export function TicketTypesPage() {
         name: name.trim(),
         price: price ? Number(price) : undefined,
         quota: Number(quota) || 0,
+        maxTicketsPerUser: Number(maxTicketsPerUser) || undefined,
         codePrefix: codePrefix.trim() || undefined,
         emailDistribution,
+        requireProof,
+        proofTaskDescription: requireProof ? proofTaskDescription.trim() : undefined,
       });
       setName('');
       setPrice('');
       setQuota('100');
+      setMaxTicketsPerUser('4');
       setCodePrefix('');
       setEmailDistribution(false);
+      setRequireProof(false);
+      setProofTaskDescription('');
       setTypes(await ticketClient.listTicketTypes(eventId));
     } catch (e: any) {
       setError(e?.message || 'Tạo loại vé thất bại.');
@@ -236,6 +250,23 @@ export function TicketTypesPage() {
               />
             </div>
           </div>
+          {/* MAX-PER-USER: số vé tối đa mỗi người dùng nhận được. */}
+          <div className="form-field">
+            <label htmlFor="tt-maxper">Số vé tối đa mỗi người nhận</label>
+            <input
+              id="tt-maxper"
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              value={maxTicketsPerUser}
+              onChange={(e) => setMaxTicketsPerUser(e.target.value)}
+              aria-describedby="tt-maxper-hint"
+            />
+            <div className="hint" id="tt-maxper-hint">
+              Mỗi người dùng chỉ được nhận tối đa số vé này của loại vé (mặc định 4).
+            </div>
+          </div>
           <div className="form-field">
             <label htmlFor="tt-prefix">Tiền tố mã vé (ví dụ: VIP)</label>
             <input
@@ -266,8 +297,55 @@ export function TicketTypesPage() {
               </div>
             </div>
           </div>
+          {/* VÉ-MIỄN-PHÍ-MINH-CHỨNG: checkbox yêu cầu ảnh minh chứng nhiệm vụ. */}
+          <div className="check-row">
+            <input
+              id="tt-requireproof"
+              type="checkbox"
+              checked={requireProof}
+              onChange={(e) => setRequireProof(e.target.checked)}
+              aria-describedby="tt-requireproof-hint"
+            />
+            <div className="check-text">
+              <label className="check-label" htmlFor="tt-requireproof">
+                Yêu cầu ảnh minh chứng nhiệm vụ (vé miễn phí)
+              </label>
+              <div className="hint" id="tt-requireproof-hint">
+                Bật: người dùng phải gửi ảnh minh chứng làm nhiệm vụ vào bình luận
+                của sự kiện — AI kiểm tra ảnh trước khi được phát vé. Chỉ nên dùng
+                cho vé miễn phí (price = 0).
+              </div>
+            </div>
+          </div>
+          {requireProof && (
+            <div className="form-field">
+              <label htmlFor="tt-prooftask">Mô tả nhiệm vụ (bắt buộc khi bật)</label>
+              <textarea
+                id="tt-prooftask"
+                value={proofTaskDescription}
+                onChange={(e) => setProofTaskDescription(e.target.value)}
+                maxLength={1000}
+                rows={3}
+                placeholder="VD: Chụp ảnh chia sẻ bài viết sự kiện lên trang cá nhân (story Facebook)"
+                aria-describedby="tt-prooftask-hint"
+              />
+              <div className="hint" id="tt-prooftask-hint">
+                AI dùng mô tả này để phán đoán ảnh minh chứng trong bình luận có
+                hợp lệ không. Nên mô tả cụ thể hành động cần thấy trong ảnh.
+              </div>
+              {requireProof && proofTaskDescription.trim() === '' && (
+                <div className="error-box" role="alert" style={{ marginTop: 8 }}>
+                  Bật yêu cầu minh chứng thì phải nhập mô tả nhiệm vụ.
+                </div>
+              )}
+            </div>
+          )}
           <div className="form-actions">
-            <Button type="submit" loading={saving} disabled={!eventId}>
+            <Button
+              type="submit"
+              loading={saving}
+              disabled={!eventId || (requireProof && proofTaskDescription.trim() === '')}
+            >
               Tạo loại vé
             </Button>
           </div>
@@ -289,8 +367,10 @@ export function TicketTypesPage() {
                   <th>Tổng số</th>
                   <th>Đã phát</th>
                   <th>Còn lại</th>
+                  <th>Max/người</th>
                   <th>Tiền tố</th>
                   <th>Phát email</th>
+                  <th>Minh chứng</th>
                   <th></th>
                 </tr>
               </thead>
@@ -302,8 +382,18 @@ export function TicketTypesPage() {
                     <td>{t.quantity ?? '—'}</td>
                     <td>{t.sold ?? '—'}</td>
                     <td>{t.remaining ?? t.quota}</td>
+                    {/* MAX-PER-USER: cột số vé tối đa mỗi người nhận. */}
+                    <td>{t.maxTicketsPerUser ?? '—'}</td>
                     <td className="mono">{t.codePrefix || '—'}</td>
                     <td>{t.emailDistribution ? 'Có' : '—'}</td>
+                    <td>
+                      {/* VÉ-MIỄN-PHÍ-MINH-CHỨNG: badge loại vé yêu cầu minh chứng. */}
+                      {t.requireProof ? (
+                        <span title={t.proofTaskDescription || ''}>Có</span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td>
                       <Link className="btn btn-link" to={`/admin/ticket-types/${t.id}/edit`}>
                         Sửa

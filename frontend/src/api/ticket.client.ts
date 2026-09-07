@@ -158,8 +158,14 @@ export const ticketClient = {
     name: string;
     price?: number;
     quota: number;
+    /** MAX-PER-USER: số vé tối đa mỗi người nhận (default 4 khi không gửi). */
+    maxTicketsPerUser?: number;
     codePrefix?: string;
     emailDistribution?: boolean;
+    /** VÉ-MIỄN-PHÍ-MINH-CHỨNG: yêu cầu ảnh minh chứng nhiệm vụ (default false). */
+    requireProof?: boolean;
+    /** Mô tả nhiệm vụ cho AI — bắt buộc khi bật requireProof. */
+    proofTaskDescription?: string;
   }): Promise<TicketType> {
     try {
       return await unwrap<TicketType>(http.post('/admin/ticket-types', body));
@@ -167,7 +173,7 @@ export const ticketClient = {
       throw toApiError(e);
     }
   },
-  /** Edit screen: lấy 1 ticket type (name/quantity/sold) để điền form. */
+  /** Edit screen: lấy 1 ticket type (name/quantity/sold/requireProof) để điền form. */
   async getTicketTypeForEdit(id: string): Promise<TicketType> {
     try {
       return await unwrap<TicketType>(http.get(`/admin/ticket-types/${encodeURIComponent(id)}/basic`));
@@ -176,11 +182,23 @@ export const ticketClient = {
     }
   },
   /**
-   * Edit screen: sửa CHỈ name + quantity. Backend (content-service) validate
-   * quantity >= sold — vi phạm → 400 TICKET_TYPE_QUANTITY_BELOW_SOLD kèm
-   * sold trong body (ApiError.sold) để hiển thị số vé đã bán.
+   * Edit screen: sửa name + quantity + requireProof/proofTaskDescription.
+   * Backend (content-service) validate quantity >= sold — vi phạm → 400
+   * TICKET_TYPE_QUANTITY_BELOW_SOLD kèm sold trong body (ApiError.sold) để
+   * hiển thị số vé đã bán. Bật requireProof mà thiếu mô tả → 400
+   * VALIDATION_ERROR (field proofTaskDescription).
    */
-  async updateTicketTypeBasic(id: string, body: { name: string; quantity: number }): Promise<TicketType> {
+  async updateTicketTypeBasic(
+    id: string,
+    body: {
+      name: string;
+      quantity: number;
+      /** MAX-PER-USER: không gửi thì giữ nguyên giá trị hiện tại. */
+      maxTicketsPerUser?: number;
+      requireProof?: boolean;
+      proofTaskDescription?: string;
+    },
+  ): Promise<TicketType> {
     try {
       return await unwrap<TicketType>(http.patch(`/admin/ticket-types/${encodeURIComponent(id)}/basic`, body));
     } catch (e) {

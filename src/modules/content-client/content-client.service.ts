@@ -55,6 +55,9 @@ const PASSABLE_ERROR_CODES = new Set([
   // VÉ-EMAIL: 400 phát vé loại vé không bật emailDistribution — hiển thị
   // lỗi server cho admin (UI đã lọc, đây là tầng phòng thủ 2).
   'TICKET_EMAIL_DISTRIBUTION_NOT_ALLOWED',
+  // VÉ-MIỄN-PHÍ-MINH-CHỨNG: 400 vé requireProof nhưng chưa có TicketTaskProof
+  // verified cho event — hiển thị cho user thấy phải gửi ảnh minh chứng trước.
+  'TICKET_PROOF_NOT_VERIFIED',
   // DELETE-INTERNAL: 400 xóa loại vé đã có vé được cấp — kèm sold cho UI.
   'TICKET_TYPE_HAS_SOLD_TICKETS',
   // EVENT-EDIT: 400 maxParticipants < số người đã đăng ký — kèm
@@ -265,11 +268,21 @@ export class ContentClientService {
     });
   }
   /**
-   * Edit screen admin: sửa CHỈ name + quantity (PATCH .../basic ở content).
-   * Content validate quantity >= sold (service layer) — vi phạm → 400
-   * TICKET_TYPE_QUANTITY_BELOW_SOLD kèm sold trong body (pass-through Δ7).
+   * Edit screen admin: sửa name + quantity + (VÉ-MIỄN-PHÍ-MINH-CHỨNG)
+   * requireProof/proofTaskDescription (PATCH .../basic ở content).
+   * Content validate quantity >= sold và requireProof cần mô tả nhiệm vụ
+   * (service layer) — vi phạm → 400 pass-through Δ7.
    */
-  updateTicketTypeBasic(id: string, body: { name: string; quantity: number }) {
+  updateTicketTypeBasic(
+    id: string,
+    body: {
+      name: string;
+      quantity: number;
+      maxTicketsPerUser?: number;
+      requireProof?: boolean;
+      proofTaskDescription?: string;
+    },
+  ) {
     return this.request<any>(
       `/internal/distribution/ticket-types/${encodeURIComponent(id)}/basic`,
       {
@@ -291,7 +304,19 @@ export class ContentClientService {
   }
 
   // ─── Issuance ───
-  issueTickets(body: { eventId: string; ticketTypeId: string; userId: string; quantity: number }) {
+  /**
+   * VÉ-MIỄN-PHÍ-MINH-CHỨNG: emailHash (HMAC-SHA256 hex 64 từ DB ticket-mayo —
+   * recipientEmailHash của PreTicket, KHÔNG phải client input) gửi kèm khi vé
+   * requireProof để content đối chiếu TicketTaskProof. Thiếu → 400
+   * TICKET_PROOF_NOT_VERIFIED (pass-through Δ7).
+   */
+  issueTickets(body: {
+    eventId: string;
+    ticketTypeId: string;
+    userId: string;
+    quantity: number;
+    emailHash?: string;
+  }) {
     this.logger.log(
       `[ISSUE] content /internal/distribution/issue userId=${body.userId} ticketTypeId=${body.ticketTypeId} qty=${body.quantity}`,
     );

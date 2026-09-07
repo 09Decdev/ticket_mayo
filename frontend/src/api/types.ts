@@ -54,6 +54,11 @@ export interface TicketType {
   maxTicketsPerUser?: number | null;
   /** VÉ-EMAIL: true = chỉ phát qua email — chỉ hiện ở bước phát vé. */
   emailDistribution?: boolean;
+  /** VÉ-MIỄN-PHÍ-MINH-CHỨNG: true = yêu cầu ảnh minh chứng làm nhiệm vụ
+   *  (gửi vào bình luận sự kiện) trước khi được phát vé. */
+  requireProof?: boolean;
+  /** Mô tả nhiệm vụ cho AI kiểm tra ảnh minh chứng (khi requireProof=true). */
+  proofTaskDescription?: string | null;
 }
 
 export interface TicketView {
