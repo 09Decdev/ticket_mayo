@@ -63,6 +63,9 @@ model DistributionJob {
   failed         Int                @default(0)
   status         DistributionStatus @default(PENDING)
   mintMode       String             @default("LAZY") // snapshot LAZY/EAGER lúc distribute (UI-P1); default cho job lịch sử
+  /// Link trang/cộng đồng cập nhật của BTC — nhập per-job ở wizard phát vé,
+  /// thay cho env BTC_UPDATE_URL (nhiều sự kiện, dễ nhầm). NULL → email fallback env.
+  btcUrl         String?
   idempotencyKey String?            @unique
   createdBy      String?
   createdAt      DateTime           @default(now())
@@ -70,6 +73,23 @@ model DistributionJob {
   preTickets     PreTicket[]
 
   @@index([status])
+}
+
+/// Nội dung email vé ĐÃ THỰC GỬI (render final của dispatchBatch) — lưu per
+/// (job, recipient) để admin đối chiếu "đã bắn gì cho người nhận". Resend ghi đè.
+model SentEmail {
+  id        String   @id @default(uuid())
+  jobId     String
+  emailHash String
+  text      String
+  html      String
+  /// JSON [{ticketId, filename}] — danh sách PDF vé đính kèm đã gửi (key S3
+  /// suy ra từ ticketId: email/<jobId>/<ticketId>.pdf). NULL = không có PDF.
+  attachments Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([jobId, emailHash])
 }
 
 model PreTicket {

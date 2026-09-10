@@ -21,8 +21,8 @@ export function emailShortHash(email: string): string {
 }
 
 /**
- * SMTP adapter — gửi email claim thật qua relay SMTP (nodemailer).
- * Dùng khi MAIL_TRANSPORT=smtp. Port 465 => secure (SSL/TLS).
+ * SMTP adapter — gửi email vé plain-text + PDF đính kèm qua relay SMTP
+ * (nodemailer). Dùng khi MAIL_TRANSPORT=smtp. Port 465 => secure (SSL/TLS).
  */
 @Injectable()
 export class SmtpMailAdapter implements MailAdapter {
@@ -58,19 +58,18 @@ export class SmtpMailAdapter implements MailAdapter {
       from: env.MAIL_FROM ?? env.MAIL_USER,
       to: payload.email,
       subject,
-      html: payload.html ?? '',
+      text: payload.text ?? '',
+      html: payload.html,
       attachments: (payload.attachments ?? []).map((a) => ({
         filename: a.filename,
         content: a.content,
-        cid: a.cid,
         contentType: a.contentType,
-        contentDisposition: 'inline',
       })),
     });
 
     // TM-3: KHÔNG log plaintext email — dùng dạng redact.
     this.logger.log(
-      `email sent to ${redactEmail(payload.email)} (${payload.ticketTypeName} — ${payload.eventName})`,
+      `email sent to ${redactEmail(payload.email)} (${payload.ticketTypeName} — ${payload.eventName}, ${payload.attachments?.length ?? 0} PDF)`,
     );
   }
 }

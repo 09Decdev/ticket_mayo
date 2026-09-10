@@ -166,25 +166,37 @@ export class TicketPdfStorageService implements OnModuleInit {
   }
 
   /**
-   * Archive 1 vé luồng email: render PDF TẠI ticket-mayo rồi PutObject lên
-   * bucket. Fail-soft: mọi lỗi chỉ log warn — KHÔNG làm fail luồng gửi email.
+   * VÉ EMAIL (Phần 2): render PDF 1 vé kèm PII người nhận — buffer trả về
+   * để MailDispatcherService ĐÍNH KÈM email (nội dung y hệt renderLocalPdf
+   * của luồng in). Fail-soft: lỗi render chỉ log warn, trả null — email
+   * vẫn gửi (thiếu PDF vé đó).
    */
-  async archiveTicketPdf(input: ArchiveTicketPdfInput): Promise<void> {
-    if (!this.enabled) return;
-    if (!input.ticketId || !input.qrToken.startsWith('ey')) return;
+  async renderTicketPdfForEmail(
+    input: Pick<ArchiveTicketPdfInput, 'jobId' | 'ticketId' | 'qrToken' | 'ticketCode'> & {
+      attendee?: ArchiveTicketPdfInput['attendee'];
+    },
+  ): Promise<Buffer | null> {
     try {
-      const buf = await this.renderLocalPdf(input);
-      await this.getClient().send(
-        new PutObjectCommand({
-          Bucket: this.bucket,
-          Key: this.buildEmailKey(input),
-          Body: buf,
-          ContentType: 'application/pdf',
-        }),
-      );
+      return await this.renderLocalPdf(input);
     } catch (err) {
       this.logger.warn(
-        `[TICKET-PDF-S3] archive lỗi ticket=${input.ticketId} job=${input.jobId}: ${(err as Error).message}`,
+        `[TICKET-PDF] render email lỗi ticket=${input.ticketId} job=${input.jobId}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Lưu PDF đã render (đính kèm email) lên key email/ — để zip tải PDF về sau
+   * đọc được. Fail-soft: lỗi upload chỉ log warn, không ảnh hưởng luồng email.
+   */
+  async uploadEmailPdf(jobId: string, ticketId: string, buffer: Buffer): Promise<void> {
+    try {
+      if (!this.enabled) return;
+      await this.uploadPdf(this.buildEmailKey({ jobId, ticketId }), buffer);
+    } catch (err) {
+      this.logger.warn(
+        `[TICKET-PDF-S3] upload email PDF lỗi ticket=${ticketId} job=${jobId}: ${(err as Error).message}`,
       );
     }
   }

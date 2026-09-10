@@ -140,6 +140,7 @@ export class DistributionService {
             total: seeds.length,
             status: 'RUNNING',
             mintMode: 'EAGER', // luôn mint trước khi email (UI-P1)
+            btcUrl: dto.btcUrl?.trim() || null,
             idempotencyKey: dto.idempotencyKey ?? null,
             createdBy: adminId,
           },
@@ -224,12 +225,12 @@ export class DistributionService {
         eventName: tt.eventName,
         eventDate: this.formatEventDate(tt.eventStartAt, tt.eventEndAt),
         venue: tt.venue ?? null,
-        eventImage: tt.eventImageUrl ?? null,
         customerName: nameMap.get(s.email) ?? 'Người dùng MAYogu',
         customerPhone: '',
         bookedAt: this.formatDateTime(job.createdAt),
         ticketCode: src?.code ?? s.claimToken.slice(-8).toUpperCase(),
         ticketId: src?.id ?? undefined,
+        btcUrl: job.btcUrl,
       };
     });
 
@@ -250,6 +251,7 @@ export class DistributionService {
         data: { emailSentAt: new Date() },
       });
     }
+    await this.persistSentEmails(result.sentEmails);
 
     await this.prisma.distributionJob.update({
       where: { id: job.id },
@@ -732,12 +734,12 @@ export class DistributionService {
         eventName: job.eventName,
         eventDate: tt ? this.formatEventDate(tt.eventStartAt, tt.eventEndAt) : '',
         venue: tt?.venue ?? null,
-        eventImage: tt?.eventImageUrl ?? null,
         customerName: user.displayName ?? 'Người dùng MAYogu',
         customerPhone: '',
         bookedAt: this.formatDateTime(job.createdAt),
         ticketCode: tktByToken.get(token)?.contentTicketCode ?? token.slice(-8).toUpperCase(),
         ticketId: tktByToken.get(token)?.contentTicketId ?? undefined,
+        btcUrl: job.btcUrl,
       });
     }
 
@@ -749,6 +751,7 @@ export class DistributionService {
         data: { emailSentAt: new Date() },
       });
     }
+    await this.persistSentEmails(result.sentEmails);
     const skipped = pending.length - payloads.length;
     await this.audit.record({
       jobId: job.id,
@@ -756,6 +759,94 @@ export class DistributionService {
       detail: { adminId, sent: result.dispatched, failed: result.failed, skipped },
     });
     return { jobId: job.id, sent: result.dispatched, failed: result.failed, skipped };
+  }
+
+  /** Lưu nội dung email ĐÃ gửi thành công (per job+recipientHash) để admin xem
+   * lại. Fail-soft — email đã gửi rồi, lỗi archive chỉ warn. Resend ghi đè. */
+  private async persistSentEmails(
+    sentEmails:
+      | {
+          jobId: string;
+          emailHash: string;
+          text: string;
+          html: string;
+          attachments?: { ticketId: string; filename: string }[];
+        }[]
+      | undefined,
+  ): Promise<void> {
+    if (!sentEmails?.length) return;
+    for (const e of sentEmails) {
+      try {
+        const attachments = (e.attachments ?? []) as unknown as Prisma.InputJsonValue;
+        await this.prisma.sentEmail.upsert({
+          where: { jobId_emailHash: { jobId: e.jobId, emailHash: e.emailHash } },
+          create: { jobId: e.jobId, emailHash: e.emailHash, text: e.text, html: e.html, attachments },
+          update: { text: e.text, html: e.html, attachments },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[MAIL-ARCHIVE] lưu email fail job=${e.jobId} hash=${e.emailHash.slice(0, 8)}…: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /** Nội dung email đã gửi cho 1 PreTicket (theo claimToken) — 404 nếu chưa gửi. */
+  async getSentEmail(jobId: string, claimToken: string) {
+    const pt = await this.prisma.preTicket.findFirst({
+      where: { jobId, claimToken },
+      select: { recipientEmailHash: true, emailSentAt: true },
+    });
+    if (!pt) {
+      throw new NotFoundException(`PreTicket ${claimToken} không thuộc job ${jobId}.`);
+    }
+    const sent = await this.prisma.sentEmail.findUnique({
+      where: { jobId_emailHash: { jobId, emailHash: pt.recipientEmailHash } },
+    });
+    if (!sent) throw new NotFoundException('Chưa có email được lưu cho vé này.');
+    return {
+      sentAt: pt.emailSentAt ?? sent.updatedAt,
+      text: sent.text,
+      html: sent.html,
+      attachments: DistributionService.parseAttachments(sent.attachments),
+    };
+  }
+
+  /**
+   * PDF vé đính kèm của 1 email đã gửi — chỉ cho phép ticketId có trong danh
+   * sách attachments của chính email đó (đúng những gì người nhận tải về),
+   * đọc từ bucket email/<jobId>/<ticketId>.pdf.
+   */
+  async getSentEmailPdf(jobId: string, claimToken: string, ticketId: string) {
+    const pt = await this.prisma.preTicket.findFirst({
+      where: { jobId, claimToken },
+      select: { recipientEmailHash: true },
+    });
+    if (!pt) {
+      throw new NotFoundException(`PreTicket ${claimToken} không thuộc job ${jobId}.`);
+    }
+    const sent = await this.prisma.sentEmail.findUnique({
+      where: { jobId_emailHash: { jobId, emailHash: pt.recipientEmailHash } },
+      select: { attachments: true },
+    });
+    const att = DistributionService.parseAttachments(sent?.attachments).find(
+      (a) => a.ticketId === ticketId,
+    );
+    if (!att) throw new NotFoundException('PDF này không thuộc email đã gửi của vé.');
+    if (!this.pdfStorage?.enabled) {
+      throw new ServiceUnavailableException('Bucket lưu PDF chưa được bật.');
+    }
+    const buffer = await this.pdfStorage.getBuffer(this.pdfStorage.buildEmailKey({ jobId, ticketId }));
+    if (!buffer) throw new NotFoundException('PDF không còn trong bucket.');
+    return { buffer, filename: att.filename };
+  }
+
+  private static parseAttachments(value: unknown): { ticketId: string; filename: string }[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (x): x is { ticketId: string; filename: string } =>
+        !!x && typeof (x as any).ticketId === 'string' && typeof (x as any).filename === 'string',
+    );
   }
 
   private normalizeAndDedupe(emails: string[]): string[] {

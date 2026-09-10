@@ -225,12 +225,52 @@ export const ticketClient = {
     quantity: number;
     recipients: string[];
     idempotencyKey?: string;
+    btcUrl?: string;
   }): Promise<{ job: DistributionJob }> {
     try {
       const res: any = await http.post('/admin/distributions', body, {
         validateStatus: (s) => s >= 200 && s < 300,
       });
       return (res?.data?.job ? res.data : res) as { job: DistributionJob };
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+
+  /** Nội dung email ĐÃ gửi cho 1 vé (claimToken) — trang chi tiết phát vé xem lại. */
+  async getSentEmail(
+    jobId: string,
+    claimToken: string,
+  ): Promise<{
+    sentAt: string | null;
+    text: string;
+    html: string;
+    attachments?: { ticketId: string; filename: string }[];
+  }> {
+    try {
+      return await unwrap<{
+        sentAt: string | null;
+        text: string;
+        html: string;
+        attachments?: { ticketId: string; filename: string }[];
+      }>(
+        http.get(
+          `/admin/distributions/${encodeURIComponent(jobId)}/emails/${encodeURIComponent(claimToken)}`,
+        ),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+
+  /** Tải 1 PDF vé đính kèm của email đã gửi (blob — kèm Authorization qua interceptor). */
+  async downloadSentEmailPdf(jobId: string, claimToken: string, ticketId: string): Promise<Blob> {
+    try {
+      const res = await http.get<Blob>(
+        `/admin/distributions/${encodeURIComponent(jobId)}/emails/${encodeURIComponent(claimToken)}/pdf/${encodeURIComponent(ticketId)}`,
+        { responseType: 'blob' },
+      );
+      return res.data;
     } catch (e) {
       throw toApiError(e);
     }

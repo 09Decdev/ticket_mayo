@@ -8,6 +8,8 @@ export interface DistributionDraft {
   ticketTypeRemaining?: number;
   eventId?: string;
   eventName?: string;
+  /** Link cập nhật BTC (nhập mỗi đợt phát) — hiện trong email vé. Bỏ trống → server fallback env. */
+  btcUrl?: string;
   quantity: number;
 }
 

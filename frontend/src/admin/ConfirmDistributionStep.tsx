@@ -17,7 +17,7 @@ const STEPS = [
 
 export function ConfirmDistributionStep() {
   const navigate = useNavigate();
-  const { draft, clear } = useDistributionDraft();
+  const { draft, setDraft, clear } = useDistributionDraft();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,6 +42,7 @@ export function ConfirmDistributionStep() {
         quantity: draft.quantity,
         recipients: draft.emails,
         idempotencyKey,
+        btcUrl: draft.btcUrl?.trim() || undefined,
       });
       const jobId = res.job?.id;
       clear();
@@ -106,6 +107,22 @@ export function ConfirmDistributionStep() {
             )}
           </tbody>
         </table>
+      </Card>
+      <Card title="Liên kết cập nhật của BTC (hiện trong email vé)">
+        <div className="form-field">
+          <label htmlFor="btc-url">Link Facebook/website của sự kiện</label>
+          <input
+            id="btc-url"
+            type="url"
+            placeholder="https://www.facebook.com/…"
+            value={draft.btcUrl ?? ''}
+            onChange={(e) => setDraft({ btcUrl: e.target.value })}
+            style={{ width: '100%' }}
+          />
+          <div className="muted small" style={{ marginTop: 4 }}>
+            Người nhận sẽ thấy link này trong email vé. Bỏ trống nếu không muốn hiện.
+          </div>
+        </div>
       </Card>
       <Card title="Danh sách người nhận">
         <div className="tag-list">

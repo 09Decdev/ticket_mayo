@@ -110,6 +110,8 @@ export interface PreTicketView {
   lastMintError?: string | null;
   /** T5: vé thật ở content-service (đã mint) — hiển thị thay boolean ticketId. */
   contentTicketCode?: string | null;
+  /** Thời điểm email gửi thành công (null = chưa gửi) — bật nút "Xem email". */
+  emailSentAt?: string | null;
 }
 
 export interface DistributionStatusResp {

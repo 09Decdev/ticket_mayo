@@ -7,6 +7,7 @@ import { Spinner } from '../components/Spinner';
 import { StatCard } from '../components/StatCard';
 import { IconAlert, IconMail, IconTicket, IconUsers, IconZap } from '../components/icons';
 import { formatDateTime, formatApiError, shortHash } from '../common/format';
+import { SentEmailModal } from './SentEmailModal';
 
 const JOB_STATUS: Record<string, { cls: string; label: string }> = {
   COMPLETED: { cls: 'badge badge-valid', label: 'Hoàn tất' },
@@ -50,6 +51,8 @@ export function DistributionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showFailed, setShowFailed] = useState(false);
+  /** claimToken của vé đang mở modal xem email đã gửi. */
+  const [viewEmailToken, setViewEmailToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (!jobId) return;
@@ -216,6 +219,7 @@ export function DistributionDetailPage() {
                   <th>EmailHash</th>
                   <th>Lý do mint lỗi</th>
                   <th>Claim lúc</th>
+                  <th>Email đã gửi</th>
                 </tr>
               </thead>
               <tbody>
@@ -235,6 +239,21 @@ export function DistributionDetailPage() {
                       )}
                     </td>
                     <td>{formatDateTime(p.claimedAt)}</td>
+                    <td>
+                      {p.emailSentAt ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '2px 10px', fontSize: 12 }}
+                          onClick={() => setViewEmailToken(p.claimToken)}
+                        >
+                          <IconMail width={12} height={12} style={{ verticalAlign: -1, marginRight: 4 }} />
+                          Xem
+                        </button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -242,6 +261,14 @@ export function DistributionDetailPage() {
           </div>
         )}
       </Card>
+
+      {viewEmailToken && jobId && (
+        <SentEmailModal
+          jobId={jobId}
+          claimToken={viewEmailToken}
+          onClose={() => setViewEmailToken(null)}
+        />
+      )}
     </div>
   );
 }

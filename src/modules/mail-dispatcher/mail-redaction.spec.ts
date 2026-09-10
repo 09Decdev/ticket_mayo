@@ -53,12 +53,19 @@ function makePayload(): ClaimMailPayload {
     eventName: 'Sự kiện test',
     eventDate: '01/09/2026 | 10:00',
     venue: 'Hà Nội',
-    eventImage: null,
     customerName: 'Người dùng test',
     customerPhone: '',
     bookedAt: '27/08/2026 10:00',
     ticketCode: 'ABCDEF12',
-    html: '<html><body>vé</body></html>',
+    ticketCount: 2,
+    text: 'Bạn thân mến,\r\n\r\nChúc mừng bạn đã nhận được 2 vé...',
+    attachments: [
+      {
+        filename: 'VE-ABCDEF12.pdf',
+        content: Buffer.from('%PDF-1.4 fake'),
+        contentType: 'application/pdf',
+      },
+    ],
   };
 }
 
@@ -120,15 +127,21 @@ describe('TM-3 redaction — plaintext email KHÔNG xuất hiện trong log/file
       expect(allLogged).not.toContain('nguyen.van.a@');
     });
 
-    it('tên file preview dùng emailShortHash — KHÔNG chứa email plaintext', async () => {
+    it('tên file preview dùng emailShortHash (text + PDF), KHÔNG chứa email plaintext', async () => {
       const adapter = new ConsoleMailAdapter();
       await adapter.send(makePayload());
 
-      expect(writtenFiles).toHaveLength(1);
-      const fileName = writtenFiles[0].path.split(/[\\/]/).pop() ?? '';
-      expect(fileName).toMatch(/^[0-9a-f]{12}-.{8}\.html$/);
-      expect(fileName).not.toContain('@');
-      expect(writtenFiles[0].path).not.toContain('nguyen');
+      // 1 file .txt (body text) + 1 file .pdf (đính kèm).
+      expect(writtenFiles).toHaveLength(2);
+      for (const f of writtenFiles) {
+        const fileName = f.path.split(/[\\/]/).pop() ?? '';
+        expect(fileName).not.toContain('@');
+        expect(fileName).not.toContain('nguyen');
+      }
+      const txt = writtenFiles.find((f) => f.path.endsWith('.txt'));
+      expect((txt?.path ?? '').split(/[\\/]/).pop()).toMatch(/^[0-9a-f]{12}-.{8}\.txt$/);
+      const pdf = writtenFiles.find((f) => f.path.endsWith('.pdf'));
+      expect((pdf?.path ?? '').split(/[\\/]/).pop()).toMatch(/^[0-9a-f]{12}-.{8}-VE-ABCDEF12\.pdf$/);
     });
   });
 

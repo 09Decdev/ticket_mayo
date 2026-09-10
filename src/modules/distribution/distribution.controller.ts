@@ -174,6 +174,46 @@ export class DistributionController {
     return this.service.getStatus(id, includeFailed === 'true');
   }
 
+  @Get(':id/emails/:claimToken')
+  @ApiOperation({
+    summary: 'Nội dung email ĐÃ gửi cho 1 vé (claimToken) — text + html để admin xem lại',
+  })
+  sentEmail(@Param('id') id: string, @Param('claimToken') claimToken: string) {
+    return this.service.getSentEmail(id, claimToken);
+  }
+
+  @Get(':id/emails/:claimToken/pdf/:ticketId')
+  @ApiOperation({
+    summary: 'Tải PDF vé ĐÍNH KÈM của 1 email đã gửi (chỉ ticketId có trong email đó)',
+  })
+  async sentEmailPdf(
+    @Param('id') id: string,
+    @Param('claimToken') claimToken: string,
+    @Param('ticketId') ticketId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      const { buffer, filename } = await this.service.getSentEmailPdf(id, claimToken, ticketId);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      );
+      res.end(buffer);
+    } catch (err) {
+      const status =
+        err instanceof HttpException ? err.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      if (!res.headersSent) {
+        res
+          .status(status)
+          .json({
+            statusCode: status,
+            message: err instanceof HttpException ? err.message : 'Tải PDF thất bại.',
+          });
+      }
+    }
+  }
+
   @Post(':id/retry')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

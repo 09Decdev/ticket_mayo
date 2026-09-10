@@ -5,6 +5,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   Max,
   Min,
 } from 'class-validator';
@@ -36,4 +37,10 @@ export class DistributeRequestDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+
+  /** Link cập nhật của BTC (page/group/website của sự kiện) — hiển thị trong
+   * email vé. Bỏ trống → email fallback env BTC_UPDATE_URL. */
+  @IsOptional()
+  @Matches(/^(https?:\/\/.{1,490})?$/i, { message: 'btcUrl must start with http:// or https://' })
+  btcUrl?: string;
 }

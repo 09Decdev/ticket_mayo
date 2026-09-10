@@ -157,6 +157,11 @@ class EnvConfig {
   @IsString()
   TICKET_MAYO_BASE_URL?: string;
 
+  /** Link BTC cập nhật sự kiện — đặt trong body text email vé ("Theo dõi các cập nhật mới nhất của BTC tại: ..."). */
+  @IsOptional()
+  @IsString()
+  BTC_UPDATE_URL?: string;
+
   @Transform(({ value }: { value?: string }) => (value == null ? undefined : Number(value)))
   @IsInt()
   @Min(1)
@@ -213,6 +218,7 @@ function loadRaw(): RawEnv {
     APP_UNIVERSAL_LINK_BASE:
       process.env.APP_UNIVERSAL_LINK_BASE ?? process.env.PUBLIC_BASE_URL ?? 'http://localhost:5174',
     TICKET_MAYO_BASE_URL: process.env.TICKET_MAYO_BASE_URL ?? '',
+    BTC_UPDATE_URL: process.env.BTC_UPDATE_URL ?? '',
     PORT: process.env.PORT ?? '3005',
     NODE_ENV: process.env.NODE_ENV ?? NodeEnv.Development,
   };

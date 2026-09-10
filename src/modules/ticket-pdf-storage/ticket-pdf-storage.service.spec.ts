@@ -49,14 +49,14 @@ describe('TicketPdfStorageService', () => {
     delete (globalThis as { fetch?: unknown }).fetch;
   });
 
-  it('thiếu S3 config → enabled=false, archive là no-op (không render, không throw)', async () => {
+  it('thiếu S3 config → enabled=false, render vẫn chạy (PDF trả về để đính kèm email)', async () => {
     (env as unknown as MutableEnv).S3_ENDPOINT = '';
     const { service, renderer } = makeService({});
     expect(service.enabled).toBe(false);
-    await expect(
-      service.archiveTicketPdf({ jobId: 'j1', ticketId: 't1', qrToken: 'eyabc' }),
-    ).resolves.toBeUndefined();
-    expect(renderer.renderTicketPdf).not.toHaveBeenCalled();
+    // renderTicketPdfForEmail không phụ thuộc S3 — luôn render, chỉ upload bị tắt.
+    const buf = await service.renderTicketPdfForEmail({ jobId: 'j1', ticketId: 't1', qrToken: 'eyabc' });
+    expect(buf).not.toBeNull();
+    expect(renderer.renderTicketPdf).toHaveBeenCalled();
   });
 
   it('buildEmailKey → email/<jobId>/<ticketId>.pdf', () => {
@@ -66,16 +66,7 @@ describe('TicketPdfStorageService', () => {
     );
   });
 
-  it('qrToken không phải signed token (không bắt đầu "ey") → bỏ qua, không render', async () => {
-    (env as unknown as MutableEnv).S3_ENDPOINT = 'http://127.0.0.1:8333';
-    (env as unknown as MutableEnv).S3_ACCESS_KEY = 'a';
-    (env as unknown as MutableEnv).S3_SECRET_KEY = 'b';
-    const { service, renderer } = makeService({});
-    await service.archiveTicketPdf({ jobId: 'j1', ticketId: 't1', qrToken: 'TICKET-CODE' });
-    expect(renderer.renderTicketPdf).not.toHaveBeenCalled();
-  });
-
-  it('render lỗi → fail-soft (không throw, email flow không ảnh hưởng)', async () => {
+  it('render lỗi → fail-soft trả null (không throw, email flow không ảnh hưởng)', async () => {
     (env as unknown as MutableEnv).S3_ENDPOINT = 'http://127.0.0.1:8333';
     (env as unknown as MutableEnv).S3_ACCESS_KEY = 'a';
     (env as unknown as MutableEnv).S3_SECRET_KEY = 'b';
@@ -85,16 +76,14 @@ describe('TicketPdfStorageService', () => {
       }),
     });
     await expect(
-      service.archiveTicketPdf({ jobId: 'j1', ticketId: 't1', qrToken: 'eyabc' }),
-    ).resolves.toBeUndefined();
+      service.renderTicketPdfForEmail({ jobId: 'j1', ticketId: 't1', qrToken: 'eyabc' }),
+    ).resolves.toBeNull();
   });
 
-  it('archiveTicketPdf render local: job → getTicketType → renderer với event ctx + PII', async () => {
+  it('renderTicketPdfForEmail: job → getTicketType → renderer với event ctx + PII', async () => {
     (env as unknown as MutableEnv).S3_ENDPOINT = 'http://127.0.0.1:8333';
     (env as unknown as MutableEnv).S3_ACCESS_KEY = 'a';
     (env as unknown as MutableEnv).S3_SECRET_KEY = 'b';
-    // S3 thật không chạy trong test → stub getClient bằng client giả record PutObject.
-    const puts: Array<Record<string, unknown>> = [];
     const { service, renderer, content, prisma } = makeService({
       ticketType: {
         id: 'tt-1',
@@ -109,14 +98,8 @@ describe('TicketPdfStorageService', () => {
       },
       job: { ticketTypeId: 'tt-1', ticketTypeName: 'VIP', eventName: 'Sự kiện A' },
     });
-    (service as unknown as { s3: unknown }).s3 = {
-      send: jest.fn(async (cmd: Record<string, unknown>) => {
-        puts.push(cmd);
-        return {};
-      }),
-    };
 
-    await service.archiveTicketPdf({
+    const buf = await service.renderTicketPdfForEmail({
       jobId: 'j1',
       ticketId: 't1',
       qrToken: 'eyabc',
@@ -124,6 +107,7 @@ describe('TicketPdfStorageService', () => {
       attendee: { name: 'Nguyễn Văn A', email: 'a@example.com' },
     });
 
+    expect(buf?.toString()).toContain('%PDF');
     expect(prisma.distributionJob.findUnique).toHaveBeenCalledWith({
       where: { id: 'j1' },
       select: { ticketTypeId: true, ticketTypeName: true, eventName: true },
@@ -136,12 +120,6 @@ describe('TicketPdfStorageService', () => {
     expect(input.ticketCode).toBe('TC-001');
     expect(input.token).toBe('eyabc');
     expect(input.attendee).toEqual({ name: 'Nguyễn Văn A', email: 'a@example.com' });
-    expect(puts.length).toBe(1);
-    // S3 command serialize payload: input là {Bucket, Key, Body} của PutObject.
-    const putInput = puts[0].input as { Bucket?: string; Key?: string; Body?: Buffer };
-    expect(putInput.Bucket).toBe(service.bucket);
-    expect(putInput.Key).toBe('email/j1/t1.pdf');
-    expect(putInput.Body?.toString()).toContain('%PDF');
   });
 
   it('content getTicketType lỗi → fallback job snapshot (eventName/ticketTypeName), vẫn render', async () => {
@@ -152,11 +130,8 @@ describe('TicketPdfStorageService', () => {
       ticketType: null,
       job: { ticketTypeId: 'tt-1', ticketTypeName: 'Regular', eventName: 'Sự kiện B' },
     });
-    (service as unknown as { s3: unknown }).s3 = {
-      send: jest.fn(async () => ({})),
-    };
 
-    await service.archiveTicketPdf({ jobId: 'j2', ticketId: 't2', qrToken: 'eyabc' });
+    await service.renderTicketPdfForEmail({ jobId: 'j2', ticketId: 't2', qrToken: 'eyabc' });
     const input = (renderer as unknown as { renderTicketPdf: jest.Mock }).renderTicketPdf.mock
       .calls[0][0];
     expect(input.eventTitle).toBe('Sự kiện B');

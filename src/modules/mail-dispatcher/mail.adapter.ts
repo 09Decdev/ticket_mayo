@@ -1,13 +1,12 @@
-/** Ảnh nhúng inline qua CID (Content-ID) — email client hiển thị được, không bị chặn như base64. */
-export interface CidAttachment {
-  /** Content-ID (không có dấu < >). Trong HTML dùng src="cid:<cid>". */
-  cid: string;
-  /** Tên file hiển thị nếu client không render inline. */
+/**
+ * File PDF vé đính kèm email — render sẵn tại ticket-mayo trước khi gửi.
+ */
+export interface PdfAttachment {
+  /** Tên file hiển thị (vd VE-ABC123.pdf). */
   filename: string;
-  /** Buffer nội dung ảnh. */
+  /** Buffer PDF. */
   content: Buffer;
-  /** MIME type, vd 'image/png'. */
-  contentType: string;
+  contentType: 'application/pdf';
 }
 
 export interface ClaimMailPayload {
@@ -19,22 +18,26 @@ export interface ClaimMailPayload {
   eventName: string;
   eventDate?: string | null;
   venue?: string | null;
-  /** Ảnh sự kiện (absolute URL hoặc presigned). Null → template dùng ảnh mặc định. */
-  eventImage?: string | null;
   /** Tên người nhận vé (từ PortalUser.displayName, fallback "Người dùng MAYogu"). */
   customerName?: string | null;
   /** SĐT người nhận — ticket-mayo không lưu → để trống. */
   customerPhone?: string | null;
   /** Thời gian phát vé (ISO hoặc chuỗi hiển thị vi-VN). */
   bookedAt?: string | null;
-  /** Mã vé THẬT từ bảng Ticket (content-service) — mã hóa vào QR + hiển thị trên vé. */
+  /** Mã vé THẬT từ bảng Ticket (content-service). */
   ticketCode?: string;
   /** contentTicketId (bảng Ticket content) — để fetch static signed QR token khi render. */
   ticketId?: string;
-  /** Generated body (HTML with embedded QR) — filled by MailDispatcherService. */
+  /** Số vé đính kèm trong email này (email gộp quantity vé/người). */
+  ticketCount?: number;
+  /** Link cập nhật BTC (nhập per-job ở wizard) — rỗng → renderer fallback env. */
+  btcUrl?: string | null;
+  /** Body text — filled by MailDispatcherService. */
+  text?: string;
+  /** Body HTML (bản trình bày đẹp) — filled by MailDispatcherService; text giữ làm fallback. */
   html?: string;
-  /** Ảnh inline CID: logo, notice icon, QR — filled by MailDispatcherService. */
-  attachments?: CidAttachment[];
+  /** PDF vé đính kèm — filled by MailDispatcherService. */
+  attachments?: PdfAttachment[];
 }
 
 export interface MailAdapter {
