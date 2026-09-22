@@ -1331,3 +1331,123 @@ details > summary {
 .card-head { margin-bottom: 14px; }
 .card-head h3 { margin: 0 0 2px; border: none; padding-bottom: 0; }
 .card-head .card-sub { color: var(--muted); font-size: 12.5px; margin: 0; }
+/* ============================================================
+   TICKET-APPEARANCE — trang "Ảnh vé & màu QR"
+   Preview đúng tỷ lệ UI app Flutter (my_event_ticket_card.dart
+   + ticket_qr_card.dart) — port từ ticket-visual-test.html.
+   ============================================================ */
+
+/* 2 cột: form trái, preview phải (mobile xếp dọc). */
+.appearance-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 480px) minmax(360px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .appearance-grid { grid-template-columns: 1fr; }
+}
+
+/* Hàng ảnh hiện tại + nút chọn/đổi ảnh. */
+.appearance-image-row { display: flex; gap: 14px; align-items: center; }
+.appearance-thumb {
+  width: 77px; height: 77px; border-radius: 12px; flex-shrink: 0;
+  background: linear-gradient(135deg, #d9dde3, #eceff3);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--faint); font-size: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.appearance-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.appearance-image-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+/* 2 ô màu QR (picker + hex text). */
+.appearance-color-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.appearance-color-item { display: flex; flex-direction: column; gap: 4px; }
+.appearance-color-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.appearance-color-inputs { display: flex; gap: 8px; align-items: center; }
+.appearance-color-inputs input[type='color'] {
+  width: 40px; height: 36px; padding: 2px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); cursor: pointer;
+}
+.appearance-color-inputs input[type='text'],
+.appearance-color-inputs input:not([type]) {
+  width: 96px; font-family: ui-monospace, monospace; font-size: 13px;
+}
+.appearance-color-inputs .is-invalid { border-color: var(--danger); }
+
+/* ─── Preview canvas — nền xám nhạt như app ─── */
+.tk-preview-bg {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px; display: flex; flex-wrap: wrap; gap: 20px;
+  justify-content: center; align-items: flex-start;
+}
+
+/* Card trong danh sách "Vé của tôi" — thumbnail 77×77 + mini QR 50×50. */
+.tk-ticket-card {
+  display: flex; gap: 12px; background: #fff; border: 1px solid #e4e6ea;
+  border-radius: 14px; padding: 12px; max-width: 380px; width: 100%;
+}
+.tk-thumb {
+  width: 77px; height: 77px; border-radius: 12px; flex-shrink: 0;
+  background: linear-gradient(135deg, #d9dde3, #eceff3);
+  display: flex; align-items: center; justify-content: center;
+  color: #9aa0a6; font-size: 10px; overflow: hidden;
+}
+.tk-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.tk-t-body { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 10px; }
+.tk-t-info { min-width: 0; flex: 1; }
+.tk-t-name {
+  font-size: 14px; font-weight: 600; line-height: 1.3; color: #1a1c1e;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tk-t-name .tk-type-tag { color: #7b1113; }
+.tk-t-meta {
+  font-size: 11.5px; color: #6b7075; margin-top: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.tk-t-qr {
+  width: 50px; height: 50px; flex-shrink: 0; border: 1px solid #e4e6ea;
+  border-radius: 8px; background: #fff; display: flex; align-items: center;
+  justify-content: center; overflow: hidden;
+}
+.tk-badge {
+  display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 99px;
+  background: #e6f4ea; color: #059669; margin-top: 6px;
+}
+
+/* Vé chi tiết — banner 4096:2251 + QR 218×218 với logo 42×42. */
+.tk-d-card {
+  background: #fff; border-radius: 16px; max-width: 380px; width: 100%;
+  overflow: hidden; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+.tk-d-banner {
+  aspect-ratio: 4096 / 2251;
+  background: linear-gradient(135deg, #d9dde3, #eceff3); position: relative;
+}
+.tk-d-banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tk-d-banner span {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; color: #9aa0a6; font-size: 11px;
+}
+.tk-d-body { padding: 16px; text-align: center; }
+.tk-d-title { font-size: 16px; font-weight: 700; margin-bottom: 2px; color: #1a1c1e; }
+.tk-d-serial { font-size: 12px; color: #6b7075; margin-bottom: 14px; font-family: ui-monospace, monospace; }
+.tk-d-qr-wrap {
+  width: 218px; height: 218px; margin: 0 auto 14px; background: #fff;
+  border: 1px solid #e4e6ea; border-radius: 12px; display: flex;
+  align-items: center; justify-content: center; position: relative;
+}
+.tk-d-qr-logo {
+  position: absolute; width: 42px; height: 42px; border-radius: 8px;
+  background: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 9px; color: #7b1113; font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.tk-d-info {
+  text-align: left; font-size: 12.5px; color: #1a1c1e;
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px;
+}
+.tk-d-info b { font-weight: 600; }
+.tk-d-footer {
+  font-size: 11px; color: #6b7075; border-top: 1px dashed #e4e6ea; padding-top: 10px;
+}

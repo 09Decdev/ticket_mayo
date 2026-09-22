@@ -14,7 +14,12 @@ import type {
   MergeRollbackResult,
   MergeTicketOverrides,
   OverviewStats,
+  SplitPlanReport,
+  SplitApplyResult,
+  SplitRollbackResult,
   TicketType,
+  TicketTypeAppearance,
+  TicketTypeImageUpload,
   TicketView,
 } from './types';
 
@@ -218,6 +223,72 @@ export const ticketClient = {
     } catch (e) {
       throw toApiError(e);
     }
+  },
+
+  // ─── TICKET-APPEARANCE ("Ảnh vé & màu QR") ───
+  /** Appearance screen: giá trị hiện tại (ảnh riêng + màu QR + event context). */
+  async getTicketTypeAppearance(id: string): Promise<TicketTypeAppearance> {
+    try {
+      return await unwrap<TicketTypeAppearance>(
+        http.get(`/admin/ticket-types/${encodeURIComponent(id)}/appearance`),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Lưu cấu hình hiển thị. null = reset về default (ảnh dùng chung event,
+   * QR đen/trắng). Hex #RGB/#RRGGBB — backend validate mirror content safeHex.
+   */
+  async updateTicketTypeAppearance(
+    id: string,
+    body: {
+      ticketImageFileId?: string | null;
+      qrForegroundColor?: string | null;
+      qrBackgroundColor?: string | null;
+    },
+  ): Promise<TicketTypeAppearance> {
+    try {
+      return await unwrap<TicketTypeAppearance>(
+        http.patch(`/admin/ticket-types/${encodeURIComponent(id)}/appearance`, body),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Upload ảnh vé (multipart — tự set Content-Type multipart/form-data, KHÔNG
+   * dùng default JSON của instance). Trả fileId CHƯA gắn — admin xem preview
+   * rồi bấm Lưu mới PATCH ticketImageFileId.
+   */
+  async uploadTicketTypeImage(id: string, file: File): Promise<TicketTypeImageUpload> {
+    try {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const res = await http.post<TicketTypeImageUpload>(
+        `/admin/ticket-types/${encodeURIComponent(id)}/appearance/image`,
+        form,
+        { timeout: 120_000, headers: { 'Content-Type': 'multipart/form-data' } },
+      );
+      return res.data;
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * Proxy presigned URL → bytes ảnh same-origin cho preview (backend fetch
+   * thay trình duyệt — tránh CORS SeaweedFS). Lỗi 404 → caller fallback.
+   */
+  async getAppearanceImage(ticketTypeId: string, presignedUrl: string): Promise<Blob> {
+    const res = await http.get<Blob>(
+      `/admin/ticket-types/${encodeURIComponent(ticketTypeId)}/appearance/image-proxy`,
+      {
+        params: { url: presignedUrl },
+        responseType: 'blob',
+        timeout: 15000,
+      },
+    );
+    return res.data as Blob;
   },
 
   async createDistribution(body: {
@@ -482,6 +553,72 @@ export const ticketClient = {
     try {
       return await unwrap<MergeRollbackResult>(
         http.post('/admin/ticket-merge/rollback', body, { timeout: 130_000 }),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+
+  // ─── TICKET-SPLIT ("Điều chuyển vé") ───
+  /**
+   * GET plan (dry-run): { content: <split-plan report>, local: <subset PreTicket report> }.
+   * movePreview = moveCount vé MỚI NHẤT sẽ chuyển (order createdAt desc).
+   */
+  async splitPlan(params: {
+    eventId: string;
+    sourceId: string;
+    targetId: string;
+    keepCount: number;
+    sourceQuantity?: number;
+    targetQuantity?: number;
+  }): Promise<SplitPlanReport> {
+    try {
+      return await unwrap<SplitPlanReport>(
+        http.get(
+          `/admin/ticket-split/plan${qs({
+            eventId: params.eventId,
+            sourceId: params.sourceId,
+            targetId: params.targetId,
+            keepCount: params.keepCount,
+            sourceQuantity: params.sourceQuantity,
+            targetQuantity: params.targetQuantity,
+          })}`,
+        ),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /**
+   * POST split (confirm="SPLIT"). Timeout 130s — content transaction lớn có
+   * thể chạy tới 120s; axios default 30s sẽ abort sớm hơn backend.
+   */
+  async splitTicketTypes(body: {
+    eventId: string;
+    sourceId: string;
+    targetId: string;
+    keepCount: number;
+    sourceQuantity?: number;
+    targetQuantity?: number;
+    confirm: 'SPLIT';
+  }): Promise<SplitApplyResult> {
+    try {
+      return await unwrap<SplitApplyResult>(
+        http.post('/admin/ticket-split', body, { timeout: 130_000 }),
+      );
+    } catch (e) {
+      throw toApiError(e);
+    }
+  },
+  /** POST rollback (confirm="ROLLBACK") — content trước, local sau. */
+  async splitRollback(body: {
+    contentAuditId: string;
+    repointAuditId?: string;
+    confirm: 'ROLLBACK';
+  }): Promise<SplitRollbackResult> {
+    try {
+      return await unwrap<SplitRollbackResult>(
+        http.post('/admin/ticket-split/rollback', body, { timeout: 130_000 }),
       );
     } catch (e) {
       throw toApiError(e);

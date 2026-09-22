@@ -72,6 +72,13 @@ const PASSABLE_ERROR_CODES = new Set([
   'TICKET_TYPE_MERGE_BLOCKED',
   'TICKET_TYPE_MERGE_ROLLBACK_CONFLICT',
   'TICKET_TYPE_MERGE_AUDIT_NOT_FOUND',
+  // TICKET-TYPE-SPLIT: internal split API errors — pass-through để UI admin
+  // hiển thị đúng nguyên nhân (400 shape/quantity, 409 blockers reservation/
+  // drift-guard rollback, 404 audit not found).
+  'TICKET_TYPE_SPLIT_INVALID_INPUT',
+  'TICKET_TYPE_SPLIT_BLOCKED',
+  'TICKET_TYPE_SPLIT_ROLLBACK_CONFLICT',
+  'TICKET_TYPE_SPLIT_AUDIT_NOT_FOUND',
 ]);
 
 /** Số recipient tối đa / mint call (chunk client-side, ≤ max 1000 của content DTO). */
@@ -156,9 +163,13 @@ export class ContentClientService {
           if (typeof body?.registeredCount === 'number') {
             registeredCount = body.registeredCount;
           }
-          // TICKET-TYPE-MERGE: blockers/warnings là mảng string — chỉ pass khi
-          // bizCode là merge code (whitelist bên dưới gate lại).
-          if (bizCode?.startsWith('TICKET_TYPE_MERGE')) {
+          // TICKET-TYPE-MERGE / TICKET-TYPE-SPLIT: blockers/warnings là mảng
+          // string — chỉ pass khi bizCode là merge/split code (whitelist bên
+          // dưới gate lại).
+          if (
+            bizCode?.startsWith('TICKET_TYPE_MERGE') ||
+            bizCode?.startsWith('TICKET_TYPE_SPLIT')
+          ) {
             if (Array.isArray(body?.blockers)) blockers = body.blockers as unknown[];
             if (Array.isArray(body?.warnings)) warnings = body.warnings as unknown[];
           }
@@ -504,6 +515,111 @@ export class ContentClientService {
     });
   }
 
+  // ─── TICKET-APPEARANCE: upload ảnh (upload-service) + presigned URL ───
+  /**
+   * Upload ảnh vé lên upload-service (multipart POST /events/upload — endpoint
+   * public của admin tool, KHÔNG cần x-service-token). Node 18+ FormData/Blob
+   * native; KHÔNG set Content-Type thủ công (fetch tự sinh multipart boundary).
+   * Trả về file id để PATCH ticketImageFileId lên content-service.
+   */
+  private readonly uploadBaseUrl = `${(env.UPLOAD_SERVICE_BASE_URL ?? 'http://localhost:9989')
+    .replace(/\/$/, '')
+    .replace(/\/upload-service$/, '')}/upload-service`;
+
+  async uploadEventImage(file: {
+    buffer: Buffer;
+    originalname: string;
+    mimetype: string;
+  }): Promise<{ id: string; status: string; type: string }> {
+    const form = new FormData();
+    const safeName =
+      file.originalname && /\.(png|jpe?g|webp|gif)$/i.test(file.originalname)
+        ? file.originalname
+        : `${Date.now()}.png`;
+    form.append(
+      'file',
+      new Blob([new Uint8Array(file.buffer)], { type: file.mimetype || 'image/png' }),
+      safeName,
+    );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const res = await globalThis.fetch(`${this.uploadBaseUrl}/events/upload`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let message = `upload-service ${res.status}`;
+        try {
+          const body = (await res.json()) as { message?: string };
+          message = body?.message ?? message;
+        } catch {
+          /* non-JSON error body */
+        }
+        this.logger.error(`upload POST /events/upload → ${res.status} ${message}`);
+        throw new HttpException(
+          `Upload ảnh thất bại: ${message}`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      const body = (await res.json()) as {
+        success?: boolean;
+        data?: { id?: string; status?: string; type?: string };
+        id?: string;
+        status?: string;
+        type?: string;
+      };
+      const payload = body?.data ?? body;
+      const id = payload?.id;
+      if (!id) {
+        this.logger.error(`upload POST /events/upload → response thiếu file id`);
+        throw new BadGatewayException(
+          'upload-service trả về phản hồi không hợp lệ (thiếu file id).',
+        );
+      }
+      this.logger.log(`[UPLOAD] ảnh vé OK fileId=${id} status=${payload.status ?? '?'}`);
+      return { id, status: payload.status ?? 'PENDING', type: payload.type ?? 'IMAGE' };
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        throw new ServiceUnavailableException('upload-service timeout (60s)');
+      }
+      if (err instanceof HttpException) throw err;
+      this.logger.error(
+        `upload POST /events/upload transport error: ${(err as Error).message}`,
+      );
+      throw new ServiceUnavailableException('upload-service unavailable');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Resolve presigned URL cho file ảnh (GET /files/internal/presignedUrl?ids=).
+   * Fail-soft → null: admin UI vẫn mở được, ảnh hiển thị placeholder.
+   */
+  async resolvePresignedUrl(fileId: string): Promise<string | null> {
+    if (!fileId) return null;
+    try {
+      const res = await globalThis.fetch(
+        `${this.uploadBaseUrl}/files/internal/presignedUrl?ids=${encodeURIComponent(fileId)}`,
+        { method: 'GET', signal: AbortSignal.timeout(10_000) },
+      );
+      if (!res.ok) return null;
+      const body = (await res.json()) as
+        | Array<{ id: string; url?: string; exists?: boolean }>
+        | { data?: Array<{ id: string; url?: string; exists?: boolean }> };
+      const list = Array.isArray(body) ? body : (body?.data ?? []);
+      const found = list.find((x) => x?.id === fileId);
+      return found?.url && found.exists !== false ? found.url : null;
+    } catch (err) {
+      this.logger.warn(
+        `[UPLOAD] presignedUrl fileId=${fileId} fail: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   // ─── Portal ───
   getUserTickets(userId: string) {
     return this.request<{ tickets: any[] }>(
@@ -581,6 +697,72 @@ export class ContentClientService {
     this.logger.log(`[MERGE] content rollback audit=${body.auditId}`);
     return this.request<any>(
       '/internal/distribution/ticket-types/merge/rollback',
+      { method: 'POST', body: JSON.stringify(body) },
+      120_000,
+    );
+  }
+
+  // ─── TICKET-TYPE-SPLIT (admin "Điều chuyển vé") ───
+  /**
+   * GET split-plan (dry-run, không ghi gì): eligible/moveCount, preview
+   * moveCount vé mới nhất (ticketId/ticketCode/userId/createdAt/status),
+   * projection quantity/sold 2 loại, blockers + warnings.
+   */
+  getSplitPlan(params: {
+    eventId: string;
+    sourceId: string;
+    targetId: string;
+    keepCount: number;
+    sourceQuantity?: number;
+    targetQuantity?: number;
+  }) {
+    const qp = new URLSearchParams({
+      eventId: params.eventId,
+      sourceId: params.sourceId,
+      targetId: params.targetId,
+      keepCount: String(params.keepCount),
+    });
+    if (params.sourceQuantity !== undefined) {
+      qp.set('sourceQuantity', String(params.sourceQuantity));
+    }
+    if (params.targetQuantity !== undefined) {
+      qp.set('targetQuantity', String(params.targetQuantity));
+    }
+    return this.request<any>(`/internal/distribution/ticket-types/split-plan?${qp.toString()}`);
+  }
+
+  /**
+   * POST split (transaction thật ở content). Timeout 120s — content giữ
+   * advisory lock per event + re-point N vé; 15s mặc định KHÔNG đủ cho event
+   * lớn. Lỗi split (400/409) pass-through kèm blockers[]/warnings[] qua
+   * whitelist. Dùng sourceQuantity/targetQuantity khi admin muốn đặt lại
+   * quantity khác default (source=keepCount, target=giữ nguyên).
+   */
+  splitTicketTypes(body: {
+    eventId: string;
+    sourceId: string;
+    targetId: string;
+    keepCount: number;
+    sourceQuantity?: number;
+    targetQuantity?: number;
+    actorId?: string;
+  }) {
+    this.logger.log(
+      `[SPLIT] content /internal/distribution/ticket-types/split event=${body.eventId} ` +
+        `source=${body.sourceId} target=${body.targetId} keep=${body.keepCount}`,
+    );
+    return this.request<any>(
+      '/internal/distribution/ticket-types/split',
+      { method: 'POST', body: JSON.stringify(body) },
+      120_000,
+    );
+  }
+
+  /** POST split/rollback theo auditId (120s như split). */
+  splitRollback(body: { auditId: string; actorId?: string }) {
+    this.logger.log(`[SPLIT] content rollback audit=${body.auditId}`);
+    return this.request<any>(
+      '/internal/distribution/ticket-types/split/rollback',
       { method: 'POST', body: JSON.stringify(body) },
       120_000,
     );

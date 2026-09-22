@@ -12,6 +12,7 @@ import { StatsModule } from './modules/stats/stats.module';
 import { TicketPortalModule } from './modules/ticket-portal/ticket-portal.module';
 import { ClaimModule } from './modules/claim/claim.module';
 import { TicketMergeModule } from './modules/ticket-merge/ticket-merge.module';
+import { TicketSplitModule } from './modules/ticket-split/ticket-split.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { TicketMergeModule } from './modules/ticket-merge/ticket-merge.module';
     TicketPortalModule,
     ClaimModule,
     TicketMergeModule,
+    TicketSplitModule,
   ],
 })
 export class AppModule {}

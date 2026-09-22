@@ -93,6 +93,15 @@ class EnvConfig {
   @IsString()
   USER_COMMUNITY_BASE_URL?: string;
 
+  /**
+   * Base URL của upload-service — upload ảnh vé (multipart POST /events/upload,
+   * KHÔNG cần auth — CORS mở cho admin tool) + resolve presigned URL để preview.
+   * Trống → dùng cùng host với CONTENT_SERVICE_BASE_URL (gateway chung).
+   */
+  @IsOptional()
+  @IsString()
+  UPLOAD_SERVICE_BASE_URL?: string;
+
   /** Thông tin thương hiệu in trong email vé (fallback nếu env thiếu). */
   @IsOptional()
   @IsString()
@@ -199,6 +208,8 @@ function loadRaw(): RawEnv {
     MINT_SIGNING_KEY: process.env.MINT_SIGNING_KEY ?? '',
     USER_COMMUNITY_BASE_URL:
       process.env.USER_COMMUNITY_BASE_URL ?? 'http://localhost:3001',
+    UPLOAD_SERVICE_BASE_URL:
+      process.env.UPLOAD_SERVICE_BASE_URL ?? 'http://localhost:9989',
     SUPPORT_EMAIL: process.env.SUPPORT_EMAIL ?? 'support@mayogu.com',
     SUPPORT_PHONE: process.env.SUPPORT_PHONE ?? '0966 855 560',
     BRAND_LOGO_URL: process.env.BRAND_LOGO_URL ?? '',

@@ -59,6 +59,41 @@ export interface TicketType {
   requireProof?: boolean;
   /** Mô tả nhiệm vụ cho AI kiểm tra ảnh minh chứng (khi requireProof=true). */
   proofTaskDescription?: string | null;
+  /** TICKET-APPEARANCE: file id ảnh riêng của loại vé (upload-service). */
+  ticketImageFileId?: string | null;
+  /** TICKET-APPEARANCE: màu module QR (dark), hex #RGB/#RRGGBB. */
+  qrForegroundColor?: string | null;
+  /** TICKET-APPEARANCE: màu nền QR (light), hex #RGB/#RRGGBB. */
+  qrBackgroundColor?: string | null;
+}
+
+/** TICKET-APPEARANCE: GET /admin/ticket-types/:id/appearance — giá trị hiện
+ *  tại + event context cho preview (title/venue/thời gian/ảnh fallback). */
+export interface TicketTypeAppearance {
+  id: string;
+  eventId: string;
+  name: string;
+  ticketImageFileId?: string | null;
+  qrForegroundColor?: string | null;
+  qrBackgroundColor?: string | null;
+  /** Presigned URL ảnh riêng (đã resolve ở content — đi qua image-proxy). */
+  ticketImageUrl?: string | null;
+  event?: {
+    id: string;
+    title: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    address?: string | null;
+    eventImageUrl?: string | null;
+  } | null;
+}
+
+/** TICKET-APPEARANCE: kết quả upload ảnh (chưa gắn vào loại vé). */
+export interface TicketTypeImageUpload {
+  ticketTypeId: string;
+  fileId: string;
+  status: string;
+  type: string;
 }
 
 export interface TicketView {
@@ -191,6 +226,8 @@ export interface ApiError {
   /** TICKET-MERGE apply fail 4xx: local repoint đã được tự undo chưa. */
   localRepointRolledBack?: boolean;
   repointAuditId?: string;
+  /** SPLIT batch (D16): các đợt ≤500 vé ĐÃ COMMIT trước khi lỗi ở đợt sau. */
+  completedRounds?: SplitApplyRound[];
 }
 
 // ─── TICKET-MERGE: "Gộp loại vé" admin page ───
@@ -308,5 +345,125 @@ export interface MergeRollbackResult {
     restored: { tickets: number; reservations: number; seats: number; giftCampaigns: number };
   } | null;
   local: { movedPreTickets: number; movedJobs: number } | null;
+  warning?: string;
+}
+
+// ─── TICKET-SPLIT: "Điều chuyển vé" admin page ───
+/** Một vé trong movePreview (mới nhất trước) từ content split-plan. */
+export interface SplitMovePreviewItem {
+  ticketId: string;
+  ticketCode: string;
+  userId: string | null;
+  createdAt: string;
+  status: TicketStatus;
+  checkedInAt?: string | null;
+}
+
+/** Snapshot loại vé từ content split-plan (source/target). */
+export interface SplitTypeSnap {
+  id: string;
+  name: string;
+  price: string;
+  quantity: number;
+  sold: number;
+  remaining: number;
+}
+
+export interface SplitProjectionSide {
+  quantity: number;
+  sold: number;
+  remaining: number;
+}
+
+export interface SplitPlanContent {
+  ok: boolean;
+  mode?: 'plan';
+  eventId: string;
+  shapeErrors: string[];
+  blockers: string[];
+  warnings: string[];
+  eligibleCount: number;
+  moveCount: number;
+  movePreview: SplitMovePreviewItem[];
+  movePreviewTruncated: boolean;
+  projection: {
+    sourceAfter: SplitProjectionSide;
+    targetAfter: SplitProjectionSide;
+    maxParticipantsAfter: number | null;
+  } | null;
+  source: SplitTypeSnap | null;
+  target: SplitTypeSnap | null;
+  event: { maxParticipantsBefore: number | null; checkInSnapshotVersionBefore?: number | null };
+  generatedAt: string;
+}
+
+/** GET /admin/ticket-split/plan → { content, local } */
+export interface SplitPlanReport {
+  content: SplitPlanContent;
+  /** Báo cáo subset PreTicket lokal (contentTicketId ∈ movedIds). */
+  local:
+    | {
+        affectedPreTickets: number;
+        byStatus: Record<string, number>;
+        note?: string;
+      }
+    | { error: string }
+    | null;
+}
+
+export interface SplitApplyRound {
+  round: number;
+  keepCount: number;
+  movedTickets: number | null;
+  contentAuditId: string | null;
+  repointAuditId: string;
+}
+
+/** Một vé đã chuyển (gom từ movePreview của MỌI đợt apply — không bị cap 500). */
+export interface SplitMovedTicket {
+  ticketId: string;
+  ticketCode: string;
+  userId: string | null;
+  status: string;
+  createdAt: string;
+}
+
+export interface SplitApplyResult {
+  status: 'split' | 'split-batched' | 'split-after-ambiguous-error';
+  content: {
+    auditId: string;
+    moved: { tickets: number; seats: number };
+    projection: {
+      sourceAfter: SplitProjectionSide;
+      targetAfter: SplitProjectionSide;
+      maxParticipantsAfter: number | null;
+    } | null;
+    event: { maxParticipantsBefore: number | null; maxParticipantsAfter: number | null };
+    soldReconcile?: { counter: number; dbCount: number; drift: boolean };
+    warnings: string[];
+    rollbackHint?: string;
+  } | null;
+  local: { repointAuditId: string; movedPreTickets: number; movedIdsCount: number } | null;
+  // split-batched (D16): moveCount > 500 → apply tự chia đợt ≤500 vé
+  totalMoved?: number;
+  totalMovedKnown?: number;
+  partial?: boolean;
+  contentAuditIds?: string[];
+  repointAuditIds?: string[];
+  rounds?: SplitApplyRound[];
+  /** Toàn bộ vé đã chuyển (mọi đợt) — để đối chiếu DB sau apply. */
+  moved?: SplitMovedTicket[];
+  note?: string;
+}
+
+export interface SplitRollbackResult {
+  status: 'rolled_back';
+  content: {
+    rolledBack: boolean;
+    auditId: string;
+    restored: { tickets: number; seats: number };
+    event: { maxParticipantsRestored: number | null };
+  } | null;
+  local: { movedPreTickets: number } | null;
   warning?: string;
 }

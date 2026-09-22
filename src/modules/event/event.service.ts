@@ -4,6 +4,7 @@ import { CreateEventDto } from './dtos/create-event.dto';
 import { UpdateEventDto } from './dtos/update-event.dto';
 import {
   CreateTicketTypeDto,
+  UpdateTicketTypeAppearanceDto,
   UpdateTicketTypeBasicDto,
 } from './dtos/create-ticket-type.dto';
 import { UpdateTicketTypeDto } from './dtos/update-ticket-type.dto';
@@ -39,6 +40,14 @@ type ContentTicketType = {
   requireProof?: boolean;
   /** VÉ-MIỄN-PHÍ-MINH-CHỨNG: mô tả nhiệm vụ cho AI kiểm tra ảnh. */
   proofTaskDescription?: string | null;
+  /** TICKET-APPEARANCE: file id ảnh riêng của loại vé (upload-service). */
+  ticketImageFileId?: string | null;
+  /** TICKET-APPEARANCE: màu module QR (dark), hex #RGB/#RRGGBB. */
+  qrForegroundColor?: string | null;
+  /** TICKET-APPEARANCE: màu nền QR (light), hex #RGB/#RRGGBB. */
+  qrBackgroundColor?: string | null;
+  /** TICKET-APPEARANCE: presigned URL ảnh riêng (đã resolve ở content). */
+  ticketImageUrl?: string | null;
   event?: {
     id: string;
     title: string;
@@ -184,7 +193,110 @@ export class EventService {
     return this.content.deleteTicketType(id);
   }
 
-  /** Resolve một ticket type (kèm event + số lượng) — dùng cho snapshot khi phát vé. */
+  // ─── TICKET-APPEARANCE ───
+  /**
+   * Dữ liệu cho appearance screen admin (/admin/ticket-types/:id/appearance):
+   * giá trị hiển thị hiện tại (ảnh riêng + màu QR + context event) để điền
+   * form + render preview ngay khi mở trang.
+   */
+  async getTicketTypeAppearance(id: string) {
+    const tt = await this.content.getTicketType(id);
+    if (!tt) throw new NotFoundException(`Ticket type ${id} not found.`);
+    return {
+      id: tt.id,
+      eventId: tt.eventId,
+      name: tt.name,
+      ticketImageFileId: (tt as ContentTicketType).ticketImageFileId ?? null,
+      qrForegroundColor: (tt as ContentTicketType).qrForegroundColor ?? null,
+      qrBackgroundColor: (tt as ContentTicketType).qrBackgroundColor ?? null,
+      ticketImageUrl: (tt as ContentTicketType).ticketImageUrl ?? null,
+      event: tt.event
+        ? {
+            id: tt.event.id,
+            title: tt.event.title,
+            startTime: tt.event.startTime,
+            endTime: tt.event.endTime,
+            address: tt.event.address,
+            eventImageUrl: tt.event.eventImageUrl ?? null,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * Lưu cấu hình hiển thị (ảnh riêng + màu QR) qua PATCH ticket-types/:id của
+   * content (route updateTicketType đã nhận 3 field này — additive, không cần
+   * endpoint mới). Content persist thẳng vào DB (nguồn sự thật).
+   */
+  async updateTicketTypeAppearance(id: string, dto: UpdateTicketTypeAppearanceDto) {
+    const body: Record<string, string | null> = {};
+    if (dto.ticketImageFileId !== undefined) body.ticketImageFileId = dto.ticketImageFileId;
+    if (dto.qrForegroundColor !== undefined) body.qrForegroundColor = dto.qrForegroundColor;
+    if (dto.qrBackgroundColor !== undefined) body.qrBackgroundColor = dto.qrBackgroundColor;
+    const updated = await this.content.updateTicketType(id, body);
+    // Trả về shape giống getTicketTypeAppearance để frontend cập nhật preview
+    // sau save mà không cần refetch riêng.
+    const fresh = await this.content.getTicketType(id).catch(() => null);
+    const source = fresh ?? updated;
+    return {
+      id: source.id,
+      eventId: source.eventId,
+      name: source.name,
+      ticketImageFileId: (source as ContentTicketType).ticketImageFileId ?? null,
+      qrForegroundColor: (source as ContentTicketType).qrForegroundColor ?? null,
+      qrBackgroundColor: (source as ContentTicketType).qrBackgroundColor ?? null,
+      ticketImageUrl: (source as ContentTicketType).ticketImageUrl ?? null,
+      event: (source as ContentTicketType).event ?? null,
+    };
+  }
+
+  /**
+   * Upload ảnh vé (multipart) lên upload-service → trả file id để frontend
+   * PUT vào PATCH appearance. KHÔNG tự PATCH ticketImageFileId — để admin xem
+   * preview trước khi bấm lưu (không ghi rác DB khi upload xong đổi ý).
+   */
+  async uploadTicketTypeImage(id: string, file: {
+    buffer: Buffer;
+    originalname: string;
+    mimetype: string;
+    size: number;
+  }) {
+    // 404 sớm khi loại vé không tồn tại — tránh upload file rác rồi mới fail.
+    const tt = await this.content.getTicketType(id);
+    if (!tt) throw new NotFoundException(`Ticket type ${id} not found.`);
+    const uploaded = await this.content.uploadEventImage(file);
+    return {
+      ticketTypeId: id,
+      fileId: uploaded.id,
+      status: uploaded.status,
+      type: uploaded.type,
+    };
+  }
+
+  /**
+   * Proxy presigned URL → bytes ảnh (same-origin) cho preview của admin UI —
+   * trình duyệt chặn cross-origin GET SeaweedFS (CORS) nên phải đi qua backend.
+   * Fail-soft trả 404 thay vì 500 (UI hiện placeholder).
+   */
+  async getTicketTypeImage(url: string) {
+    if (!/^https?:\/\//i.test(url)) {
+      throw new NotFoundException('Invalid image URL');
+    }
+    try {
+      const res = await globalThis.fetch(url, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const contentType = res.headers.get('content-type') ?? 'image/png';
+      if (!contentType.startsWith('image/')) throw new Error(`content-type ${contentType}`);
+      const arrayBuf = await res.arrayBuffer();
+      if (arrayBuf.byteLength > 5 * 1024 * 1024) throw new Error('image too large (>5MB)');
+      return { buffer: Buffer.from(arrayBuf), contentType };
+    } catch {
+      // Không log presigned url (có signature) — fail-soft 404 cho UI.
+      throw new NotFoundException('Image not available');
+    }
+  }  /** Resolve một ticket type (kèm event + số lượng) — dùng cho snapshot khi phát vé. */
   async getTicketTypeWithEvent(ticketTypeId: string): Promise<{    id: string;
     eventId: string;
     name: string;

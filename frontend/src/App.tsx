@@ -7,7 +7,9 @@ import { EventsPage } from './admin/EventsPage';
 import { EditEventPage } from './admin/EditEventPage';
 import { TicketTypesPage } from './admin/TicketTypesPage';
 import { EditTicketTypePage } from './admin/EditTicketTypePage';
+import { TicketTypeAppearancePage } from './admin/TicketTypeAppearancePage';
 import { MergeTicketTypesPage } from './admin/MergeTicketTypesPage';
+import { SplitTicketTypesPage } from './admin/SplitTicketTypesPage';
 import { ImportEmailListPage } from './admin/ImportEmailListPage';
 import { SelectEventStep } from './admin/SelectEventStep';
 import { SelectTicketTypeStep } from './admin/SelectTicketTypeStep';
@@ -61,8 +63,12 @@ export default function App() {
           <Route path="/admin/events/:id/edit" element={<EditEventPage />} />
           <Route path="/admin/ticket-types" element={<TicketTypesPage />} />
           <Route path="/admin/ticket-types/:id/edit" element={<EditTicketTypePage />} />
+          {/* TICKET-APPEARANCE: "Ảnh vé & màu QR" — preview đúng UI app Flutter. */}
+          <Route path="/admin/ticket-types/:id/appearance" element={<TicketTypeAppearancePage />} />
           {/* TICKET-MERGE: "Gộp loại vé" — dry-run + apply MERGE + rollback ROLLBACK. */}
           <Route path="/admin/merge-ticket-types" element={<MergeTicketTypesPage />} />
+          {/* TICKET-SPLIT: "Điều chuyển vé" — dry-run + apply SPLIT + rollback ROLLBACK. */}
+          <Route path="/admin/split-ticket-types" element={<SplitTicketTypesPage />} />
           <Route path="/admin/distributions" element={<DistributionsListPage />} />
           <Route path="/admin/distributions/:jobId" element={<DistributionDetailPage />} />
           <Route path="/admin/stats" element={<AnalyticsDashboardPage />} />

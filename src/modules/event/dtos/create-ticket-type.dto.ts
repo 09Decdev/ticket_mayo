@@ -4,6 +4,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -87,4 +88,32 @@ export class UpdateTicketTypeBasicDto {
   @IsString()
   @MaxLength(1000)
   proofTaskDescription?: string;
+}
+
+/**
+ * TICKET-APPEARANCE (frontend /admin/ticket-types/:id/appearance): cấu hình
+ * hiển thị vé theo loại — ảnh riêng + màu QR. Hex validation mirror
+ * content-service safeHex (#RGB | #RRGGBB) để không bị 400 bất ngờ.
+ * - null = reset về default (ảnh dùng chung event, QR đen/trắng).
+ * - string hex = giá trị mới (PUSH content qua PATCH ticket-types/:id).
+ */
+export class UpdateTicketTypeAppearanceDto {
+  /** File id (upload-service) của ảnh vé; null = bỏ ảnh riêng. */
+  @IsOptional()
+  @IsString()
+  ticketImageFileId?: string | null;
+
+  /** Màu module QR (dark). null = default #000000. */
+  @IsOptional()
+  @Matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, {
+    message: 'qrForegroundColor phải là hex #RGB hoặc #RRGGBB',
+  })
+  qrForegroundColor?: string | null;
+
+  /** Màu nền QR (light). null = default #FFFFFF. */
+  @IsOptional()
+  @Matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, {
+    message: 'qrBackgroundColor phải là hex #RGB hoặc #RRGGBB',
+  })
+  qrBackgroundColor?: string | null;
 }

@@ -513,6 +513,10 @@ export function TicketTypesPage() {
                       <Link className="btn btn-link" to={`/admin/ticket-types/${t.id}/edit`}>
                         Sửa
                       </Link>
+                      {/* TICKET-APPEARANCE: ảnh riêng + màu QR của loại vé (preview app). */}
+                      <Link className="btn btn-link" to={`/admin/ticket-types/${t.id}/appearance`}>
+                        Ảnh vé
+                      </Link>
                       {(t.sold ?? 0) > 0 ? (
                         <span
                           className="btn btn-link is-disabled"
