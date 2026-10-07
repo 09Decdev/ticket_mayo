@@ -1,0 +1,55 @@
+# Bản production: dùng image từ GHCR (CI build khi push main), không build tại chỗ.
+# Chạy bởi deploy/server-deploy.sh (cron mỗi phút trên server).
+name: ticket-tool
+
+services:
+  ticket-mayo-api:
+    image: ghcr.io/09decdev/ticket-mayo-api:main
+    pull_policy: always
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      - PORT=3020
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ticket_mayo
+    expose:
+      - "3020"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3020/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ticket-mayo-web:
+    image: ghcr.io/09decdev/ticket-mayo-web:main
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    depends_on:
+      ticket-mayo-api:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticket_mayo
+    volumes:
+      - ticket_mayo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_mayo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ticket_mayo_pgdata:

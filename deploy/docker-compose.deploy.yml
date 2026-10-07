@@ -1,0 +1,61 @@
+# Deploy ticket-mayo (Viewer & Check-in Tool) cho marketing.
+# Chạy:  docker compose -f deploy/docker-compose.deploy.yml up -d --build
+# (context là thư mục ticket-mayo, file này nằm trong deploy/)
+name: ticket-tool
+
+services:
+  ticket-mayo-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      # environment: thắng env_file → app luôn nghe 3020 bất kể PORT trong .env
+      - PORT=3020
+      # DB riêng của tool (service `db` dưới đây), không đụng các Postgres khác trên 165
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ticket_mayo
+    expose:
+      - "3020"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3020/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Nếu DATABASE_URL trỏ tới Postgres chạy trên HOST (máy 165):
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ticket-mayo-web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "3010:80"          # LAN: http://<ip-máy>:3010  |  ngrok trỏ vào port này
+    depends_on:
+      ticket-mayo-api:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticket_mayo
+    volumes:
+      - ticket_mayo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_mayo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ticket_mayo_pgdata:
