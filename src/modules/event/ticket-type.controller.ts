@@ -101,7 +101,8 @@ export class TicketTypeController {
   @Patch(':id/appearance')
   @ApiOperation({
     summary:
-      'Update ticket type appearance — ticketImageFileId (null = bỏ ảnh riêng) + màu QR hex',
+      'Update ticket type appearance — ticketImageFileId/ticketImageFileIds ' +
+        '(null/mảng rỗng = bỏ ảnh, tối đa env content TICKET_TYPE_MAX_IMAGES default 5) + màu QR hex',
   })
   updateAppearance(
     @Param('id') id: string,

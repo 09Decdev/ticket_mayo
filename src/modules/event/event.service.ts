@@ -42,6 +42,11 @@ type ContentTicketType = {
   proofTaskDescription?: string | null;
   /** TICKET-APPEARANCE: file id ảnh riêng của loại vé (upload-service). */
   ticketImageFileId?: string | null;
+  /** TICKET-TYPE-MULTI-IMAGES: danh sách file id ảnh hạng vé (tối đa env
+   *  content TICKET_TYPE_MAX_IMAGES, default 5; legacy ticketImageFileId = ảnh đầu). */
+  ticketImageFileIds?: string[] | null;
+  /** TICKET-TYPE-MULTI-IMAGES: presigned URL từng ảnh (resolve bên content, ảnh lỗi bỏ qua). */
+  ticketImageUrls?: string[] | null;
   /** TICKET-APPEARANCE: màu module QR (dark), hex #RGB/#RRGGBB. */
   qrForegroundColor?: string | null;
   /** TICKET-APPEARANCE: màu nền QR (light), hex #RGB/#RRGGBB. */
@@ -207,6 +212,9 @@ export class EventService {
       eventId: tt.eventId,
       name: tt.name,
       ticketImageFileId: (tt as ContentTicketType).ticketImageFileId ?? null,
+      // TICKET-TYPE-MULTI-IMAGES: content đã trả mảng chuẩn hoá (legacy = ảnh đầu).
+      ticketImageFileIds: (tt as ContentTicketType).ticketImageFileIds ?? [],
+      ticketImageUrls: (tt as ContentTicketType).ticketImageUrls ?? [],
       qrForegroundColor: (tt as ContentTicketType).qrForegroundColor ?? null,
       qrBackgroundColor: (tt as ContentTicketType).qrBackgroundColor ?? null,
       ticketImageUrl: (tt as ContentTicketType).ticketImageUrl ?? null,
@@ -229,8 +237,11 @@ export class EventService {
    * endpoint mới). Content persist thẳng vào DB (nguồn sự thật).
    */
   async updateTicketTypeAppearance(id: string, dto: UpdateTicketTypeAppearanceDto) {
-    const body: Record<string, string | null> = {};
+    const body: Record<string, unknown> = {};
     if (dto.ticketImageFileId !== undefined) body.ticketImageFileId = dto.ticketImageFileId;
+    // TICKET-TYPE-MULTI-IMAGES: gửi mảng = thay cả danh sách ảnh ([]/null = xóa hết);
+    // giới hạn (env TICKET_TYPE_MAX_IMAGES, default 5) enforce phía content — vượt → 400.
+    if (dto.ticketImageFileIds !== undefined) body.ticketImageFileIds = dto.ticketImageFileIds;
     if (dto.qrForegroundColor !== undefined) body.qrForegroundColor = dto.qrForegroundColor;
     if (dto.qrBackgroundColor !== undefined) body.qrBackgroundColor = dto.qrBackgroundColor;
     const updated = await this.content.updateTicketType(id, body);
@@ -243,6 +254,8 @@ export class EventService {
       eventId: source.eventId,
       name: source.name,
       ticketImageFileId: (source as ContentTicketType).ticketImageFileId ?? null,
+      ticketImageFileIds: (source as ContentTicketType).ticketImageFileIds ?? [],
+      ticketImageUrls: (source as ContentTicketType).ticketImageUrls ?? [],
       qrForegroundColor: (source as ContentTicketType).qrForegroundColor ?? null,
       qrBackgroundColor: (source as ContentTicketType).qrBackgroundColor ?? null,
       ticketImageUrl: (source as ContentTicketType).ticketImageUrl ?? null,

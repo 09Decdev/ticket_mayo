@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsInt,
   IsNumber,
@@ -102,6 +104,17 @@ export class UpdateTicketTypeAppearanceDto {
   @IsOptional()
   @IsString()
   ticketImageFileId?: string | null;
+
+  /**
+   * TICKET-TYPE-MULTI-IMAGES: danh sách file id ảnh hạng vé (tối đa env content
+   * TICKET_TYPE_MAX_IMAGES, default 5 — content kiểm tra và trả 400 khi vượt).
+   * Mảng gửi lên = thay toàn bộ danh sách; [] / null = bỏ hết ảnh.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  ticketImageFileIds?: string[] | null;
 
   /** Màu module QR (dark). null = default #000000. */
   @IsOptional()
